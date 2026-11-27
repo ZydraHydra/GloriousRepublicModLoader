@@ -69,8 +69,9 @@ $pkgParams = @{
     Changenote      = $Changenote
     Build           = (-not $SkipBuild)
 }
+$global:LASTEXITCODE = 0
 & (Join-Path $PSScriptRoot "package_workshop.ps1") @pkgParams
-if ($LASTEXITCODE -ne 0) {
+if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
     throw "Packaging failed"
 }
 
