@@ -171,7 +171,7 @@ add_executable(grml_injector WIN32
     src/launcher/webview_host.cpp
     src/launcher/launcher.rc
 )
-grml_embed_ui_assets(grml_injector "${CMAKE_CURRENT_SOURCE_DIR}/src/launcher/dist")
+grml_embed_ui_assets(grml_injector "${CMAKE_CURRENT_SOURCE_DIR}/build/dist")
 target_include_directories(grml_injector PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
