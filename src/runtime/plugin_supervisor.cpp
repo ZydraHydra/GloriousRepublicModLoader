@@ -717,12 +717,20 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
     }
 
     // Register GRML's own internal AOB requests into the single-pass scanner
-    void* inGameFlagSite = nullptr;
-    void* priceTableSite = nullptr;
-    void* evalDistSite   = nullptr;
-    const std::string inGamePat     = offsetsIni.getString("signatures", "in_game_flag_aob", "");
-    const std::string priceTablePat = offsetsIni.getString("signatures", "price_table_aob", "");
-    const std::string evalDistPat   = offsetsIni.getString("signatures", "dispatch_check_aob", "");
+    void* inGameFlagSite    = nullptr;
+    void* priceTableSite    = nullptr;
+    void* evalDistSite      = nullptr;
+    void* menuLoopSite      = nullptr;
+    void* menuUiStateSite   = nullptr;
+    void* loadSaveHdrSite   = nullptr;
+    void* loadSaveTrigSite  = nullptr;
+    const std::string inGamePat       = offsetsIni.getString("signatures", "in_game_flag_aob", "");
+    const std::string priceTablePat   = offsetsIni.getString("signatures", "price_table_aob", "");
+    const std::string evalDistPat     = offsetsIni.getString("signatures", "dispatch_check_aob", "");
+    const std::string menuLoopPat     = offsetsIni.getString("signatures", "main_menu_loop_aob", "");
+    const std::string menuUiStatePat  = offsetsIni.getString("signatures", "main_menu_uistate_aob", "");
+    const std::string loadSaveHdrPat  = offsetsIni.getString("signatures", "load_save_header_aob", "");
+    const std::string loadSaveTrigPat = offsetsIni.getString("signatures", "load_save_trigger_aob", "");
     {
         std::lock_guard lock(g_supMutex);
         if (!inGamePat.empty()) {
@@ -733,6 +741,18 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
         }
         if (!evalDistPat.empty()) {
             g_pendingScans.push_back({"dispatch_check_aob", evalDistPat, &evalDistSite, false});
+        }
+        if (!menuLoopPat.empty()) {
+            g_pendingScans.push_back({"main_menu_loop_aob", menuLoopPat, &menuLoopSite, false});
+        }
+        if (!menuUiStatePat.empty()) {
+            g_pendingScans.push_back({"main_menu_uistate_aob", menuUiStatePat, &menuUiStateSite, false});
+        }
+        if (!loadSaveHdrPat.empty()) {
+            g_pendingScans.push_back({"load_save_header_aob", loadSaveHdrPat, &loadSaveHdrSite, false});
+        }
+        if (!loadSaveTrigPat.empty()) {
+            g_pendingScans.push_back({"load_save_trigger_aob", loadSaveTrigPat, &loadSaveTrigSite, false});
         }
     }
 
@@ -877,6 +897,36 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
     if (evalDistSite) {
         g_evalDistTaskAddr = evalDistSite;
         logger::logMessage(GRML_LOG_INFO, "AOBScanner", "dispatch_check_aob resolved -> 0x%p", g_evalDistTaskAddr);
+    }
+    if (menuLoopSite && menuUiStateSite && loadSaveHdrSite && loadSaveTrigSite) {
+        overlay::DirectSaveLoadTargets dsl{};
+        const uint32_t actDisp = static_cast<uint32_t>(offsetsIni.getInt("signatures", "main_menu_active_disp_off", 3));
+        const uint32_t actNext = static_cast<uint32_t>(offsetsIni.getInt("signatures", "main_menu_active_next_ip_off", 7));
+        const uint32_t objDisp = static_cast<uint32_t>(offsetsIni.getInt("signatures", "main_menu_obj_disp_off", 52));
+        const uint32_t objNext = static_cast<uint32_t>(offsetsIni.getInt("signatures", "main_menu_obj_next_ip_off", 56));
+        const uint32_t uiImm   = static_cast<uint32_t>(offsetsIni.getInt("signatures", "main_menu_uistate_imm_off", 2));
+        const uint32_t reqDisp = static_cast<uint32_t>(offsetsIni.getInt("signatures", "load_save_req_disp_off", 11));
+        const uint32_t reqNext = static_cast<uint32_t>(offsetsIni.getInt("signatures", "load_save_req_next_ip_off", 16));
+        const uint32_t ngDisp  = static_cast<uint32_t>(offsetsIni.getInt("signatures", "load_save_newgame_disp_off", 23));
+        const uint32_t ngNext  = static_cast<uint32_t>(offsetsIni.getInt("signatures", "load_save_newgame_next_ip_off", 28));
+
+        dsl.menuActivePtr    = static_cast<const volatile uint8_t*>(resolveRipRelativeDisp32(menuLoopSite, actDisp, actNext));
+        dsl.mainMenuObj      = static_cast<uint8_t*>(resolveRipRelativeDisp32(menuLoopSite, objDisp, objNext));
+        std::memcpy(&dsl.uiStateOff, static_cast<const uint8_t*>(menuUiStateSite) + uiImm, sizeof(dsl.uiStateOff));
+        dsl.loadSaveHeaderFn = loadSaveHdrSite;
+        dsl.loadRequestedPtr = static_cast<volatile uint8_t*>(resolveRipRelativeDisp32(loadSaveTrigSite, reqDisp, reqNext));
+        dsl.newGameFlagPtr   = static_cast<volatile uint8_t*>(resolveRipRelativeDisp32(loadSaveTrigSite, ngDisp, ngNext));
+
+        overlay::setDirectSaveLoadTargets(dsl, g_gameExePath.parent_path());
+        logger::logMessage(GRML_LOG_INFO, "AOBScanner",
+                           "Direct-to-Save targets resolved (menuObj=0x%p loadFn=0x%p uiStateOff=0x%X)",
+                           dsl.mainMenuObj, dsl.loadSaveHeaderFn, dsl.uiStateOff);
+    } else {
+        overlay::setDirectSaveLoadTargets({}, g_gameExePath.parent_path());
+        logger::logMessage(GRML_LOG_WARN, "DirectLoad",
+                           "One or more Direct-to-Save signatures missed (menuLoop=%d uiState=%d loadHdr=%d loadTrig=%d) — auto-load disabled",
+                           menuLoopSite != nullptr, menuUiStateSite != nullptr,
+                           loadSaveHdrSite != nullptr, loadSaveTrigSite != nullptr);
     }
 
     // Phase 3: Post-scan callbacks & Tesmio TsmPluginStart

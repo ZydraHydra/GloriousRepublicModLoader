@@ -145,6 +145,45 @@ std::string readSessionLastSave(const std::filesystem::path& dataDir)
     return {};
 }
 
+std::string findMostRecentSaveFolder(const std::string& discoverJson, const std::filesystem::path& dataDir)
+{
+    const auto parsed = grml::parseJson(discoverJson);
+    std::filesystem::path gameExe;
+    if (parsed && parsed->isObject()) {
+        if (const auto* g = parsed->get("gameExe")) {
+            const std::string gs = g->asString();
+            if (!gs.empty()) gameExe = std::filesystem::path(grml::utf8ToWide(gs));
+        }
+    }
+    if (gameExe.empty() || !gameExe.has_parent_path()) return {};
+
+    const std::filesystem::path savesRoot = gameExe.parent_path() / L"media_soviet" / L"save";
+    std::error_code ec;
+    std::filesystem::file_time_type bestTime{};
+    std::string bestName;
+
+    if (std::filesystem::exists(savesRoot, ec)) {
+        for (const auto& entry : std::filesystem::directory_iterator(savesRoot, ec)) {
+            if (!entry.is_directory(ec)) continue;
+            const std::filesystem::path hdr = entry.path() / L"header.bin";
+            if (!std::filesystem::exists(hdr, ec)) continue;
+            const auto wt = std::filesystem::last_write_time(hdr, ec);
+            if (!ec && (bestName.empty() || wt > bestTime)) {
+                bestTime = wt;
+                bestName = grml::wideToUtf8(entry.path().filename().wstring());
+            }
+        }
+    }
+    if (!bestName.empty()) return bestName;
+
+    const std::string fallback = readSessionLastSave(dataDir);
+    if (!fallback.empty() &&
+        std::filesystem::exists(savesRoot / grml::utf8ToWide(fallback) / L"header.bin", ec)) {
+        return fallback;
+    }
+    return {};
+}
+
 std::string toLowerAscii(std::string s)
 {
     for (char& c : s) {
@@ -503,10 +542,12 @@ void handleClient(SOCKET client)
         // Since discoverJson already contains "grmlIni" and "vfs", embed discovery and let JS/extract read them,
         // OR extract raw slices cleanly:
         const std::string playlistsJson = readPlaylistsRawJson(dataDir);
+        const std::string latestSave = findMostRecentSaveFolder(discoverJson, dataDir);
         const std::string resp =
             "{\"discovery\":" + discoverJson +
             ",\"logTail\":" + logJson +
-            ",\"playlists\":" + playlistsJson + "}";
+            ",\"playlists\":" + playlistsJson +
+            ",\"latestSave\":\"" + grml::launcher_api::jsonEscape(latestSave) + "\"}";
         sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8", resp);
     } else if (method == "GET" && path == "/api/check-update") {
         sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8", checkGitHubReleaseJson());
@@ -684,8 +725,19 @@ void handleClient(SOCKET client)
         sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8", "{\"ok\":true,\"playlists\":" + out + "}");
     } else if (method == "POST" && path == "/api/launch") {
         std::lock_guard lock(g_apiMutex);
-        DeleteFileW((dataDir / L"grml_session.json").c_str());
         const auto req = grml::parseJson(body);
+        const std::string autoLoadSave = (req && req->get("autoLoadSave"))
+            ? req->get("autoLoadSave")->asString()
+            : std::string{};
+        const std::filesystem::path sessionPath = dataDir / L"grml_session.json";
+        if (!autoLoadSave.empty()) {
+            const std::string sessionJson =
+                "{\n  \"last_loaded_save\": \"\",\n  \"auto_load_save\": \"" +
+                grml::launcher_api::jsonEscape(autoLoadSave) + "\"\n}\n";
+            grml::writeFileBytesW(sessionPath, sessionJson);
+        } else {
+            DeleteFileW(sessionPath.c_str());
+        }
         const std::filesystem::path gameExe = (req && req->get("gameExe"))
             ? std::filesystem::path(grml::utf8ToWide(req->get("gameExe")->asString()))
             : std::filesystem::path{};

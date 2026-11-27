@@ -188,6 +188,7 @@ class AppStore {
 	savesData = $state<SavesResponse | null>(null);
 	savesLoading = $state(false);
 	selectedSaveName = $state<string | null>(null);
+	latestSave = $state('');
 
 	// Diagnostics & crash banner state
 	diagData = $state<DiagnosticsData | null>(null);
@@ -227,6 +228,7 @@ class AppStore {
 			return;
 		}
 		this.discovery = data.discovery;
+		this.latestSave = data.latestSave ?? '';
 		this.grmlIni = data.grmlIni ?? data.discovery?.grmlIni ?? {};
 		this.vfs = data.vfs ?? data.discovery?.vfs ?? this.vfs;
 		this.logTail = data.logTail ?? [];
@@ -386,13 +388,20 @@ class AppStore {
 		}
 	}
 
-	async launchWrsr() {
+	async launchWrsr(autoLoadSave?: string) {
 		await this.saveGrmlIni();
-		this.setStatus('Launching SOVIET64.exe and injecting GRML...');
+		this.setStatus(
+			autoLoadSave
+				? `Launching SOVIET64.exe directly into '${autoLoadSave}'...`
+				: 'Launching SOVIET64.exe and injecting GRML...'
+		);
 		const resp = await fetch('/api/launch', {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ gameExe: this.gameExeInput.trim() })
+			body: JSON.stringify({
+				gameExe: this.gameExeInput.trim(),
+				autoLoadSave: autoLoadSave || ''
+			})
 		});
 		const data = await resp.json();
 		this.setStatus(data.message || (data.ok ? 'Launched!' : 'Launch failed'));

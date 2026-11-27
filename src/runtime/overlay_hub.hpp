@@ -24,7 +24,18 @@ struct LoadedModSummary {
     std::string status;
 };
 
+struct DirectSaveLoadTargets {
+    const volatile uint8_t* menuActivePtr{nullptr};
+    uint8_t*                mainMenuObj{nullptr};
+    uint32_t                uiStateOff{0x5074};
+    void*                   loadSaveHeaderFn{nullptr};
+    volatile uint8_t*       loadRequestedPtr{nullptr};
+    volatile uint8_t*       newGameFlagPtr{nullptr};
+};
+
 void setInGameFlagPtr(const volatile uint8_t* ptr) noexcept;
+void setDirectSaveLoadTargets(const DirectSaveLoadTargets& targets,
+                              const std::filesystem::path& gameDir);
 void setPluginsDirectory(const std::filesystem::path& pluginsDir);
 void publishLoadedMods(std::vector<LoadedModSummary> mods);
 bool hasRegisteredTabForPlugin(const std::string& pluginId);

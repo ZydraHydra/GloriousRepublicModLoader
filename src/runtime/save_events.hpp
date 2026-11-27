@@ -22,4 +22,8 @@ void registerWrite(GrmlSaveEventFn onWrite, void* userData);
 // Called by overlay_hub / runtime when in-game flag transitions 1 -> 0 (Main Menu)
 void notifyInGameState(bool inGame);
 
+// One-shot Direct-to-Save auto-load API (lock-free fast-exit check for Present hook)
+bool hasPendingAutoLoad() noexcept;
+std::wstring consumePendingAutoLoad();
+
 } // namespace grml::save_events

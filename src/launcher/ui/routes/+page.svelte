@@ -116,6 +116,14 @@
 				</Button>
 			{/if}
 			<span class="pill" title={app.discovery?.gameExe || 'Game executable not detected'}>{verLabel}</span>
+			{#if app.latestSave}
+				<Button
+					onclick={() => app.launchWrsr(app.latestSave)}
+					title={`Launch WRSR directly into save '${app.latestSave}'`}
+				>
+					▶ Continue {app.latestSave}
+				</Button>
+			{/if}
 			<Button variant="primary" onclick={() => app.launchWrsr()}>▶ Launch WRSR</Button>
 		</div>
 	</header>

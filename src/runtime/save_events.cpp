@@ -1,6 +1,8 @@
 #include "runtime/save_events.hpp"
 #include "runtime/ring_logger.hpp"
 #include "runtime/vfs_redirect.hpp"
+#include "common/ini_util.hpp"
+#include "common/json_min.hpp"
 
 #include <windows.h>
 #include <MinHook.h>
@@ -49,6 +51,9 @@ bool                    g_sessionStop = false;
 bool                    g_sessionDirty = false;
 std::wstring            g_pendingSaveName;
 std::wstring            g_pendingSavePath;
+std::atomic<bool>       g_autoLoadPending{false};
+std::mutex              g_autoLoadMutex;
+std::wstring            g_autoLoadSaveName;
 
 std::string wideToUtf8Local(std::wstring_view w)
 {
@@ -100,6 +105,7 @@ void writeSessionJsonFile(const std::filesystem::path& outPath,
     std::string json = "{\n";
     json += "  \"last_loaded_save\": \"" + nameUtf8 + "\",\n";
     json += "  \"last_loaded_save_path\": \"" + pathUtf8 + "\",\n";
+    json += "  \"auto_load_save\": \"\",\n";
     json += "  \"timestamp_utc\": \"" + tsUtc + "\",\n";
     json += "  \"pid\": " + std::to_string(pid) + "\n";
     json += "}\n";
@@ -353,6 +359,30 @@ bool install(const std::filesystem::path& loaderDir)
 
     if (!loaderDir.empty()) {
         g_sessionJsonPath = loaderDir / L"grml_session.json";
+        // Anti-Crash-Loop Guard: read auto_load_save once at startup and immediately clear it
+        std::string rawSession;
+        if (grml::readFileBytesW(g_sessionJsonPath, rawSession)) {
+            const auto parsed = grml::parseJson(rawSession);
+            if (parsed && parsed->isObject()) {
+                if (const auto* autoVal = parsed->get("auto_load_save")) {
+                    const std::string targetUtf8 = autoVal->asString();
+                    if (!targetUtf8.empty()) {
+                        const std::wstring targetW = grml::utf8ToWide(targetUtf8);
+                        if (!targetW.empty()) {
+                            {
+                                std::lock_guard lock(g_autoLoadMutex);
+                                g_autoLoadSaveName = targetW;
+                            }
+                            g_autoLoadPending.store(true, std::memory_order_release);
+                            writeSessionJsonFile(g_sessionJsonPath, targetW, L"");
+                            logger::logMessage(GRML_LOG_INFO, "SaveEvents",
+                                               "Queued one-shot auto-load for '%s' (cleared auto_load_save in grml_session.json)",
+                                               targetUtf8.c_str());
+                        }
+                    }
+                }
+            }
+        }
         {
             std::lock_guard lock(g_sessionMutex);
             g_sessionStop  = false;
@@ -431,6 +461,20 @@ void notifyInGameState(bool inGame)
         invokeUnloadCallbacks();
         logger::logMessage(GRML_LOG_INFO, "SaveEvents", "Returned to Main Menu — notified save unload subscribers");
     }
+}
+
+bool hasPendingAutoLoad() noexcept
+{
+    return g_autoLoadPending.load(std::memory_order_acquire);
+}
+
+std::wstring consumePendingAutoLoad()
+{
+    if (!g_autoLoadPending.exchange(false, std::memory_order_acq_rel)) {
+        return {};
+    }
+    std::lock_guard lock(g_autoLoadMutex);
+    return std::move(g_autoLoadSaveName);
 }
 
 } // namespace grml::save_events

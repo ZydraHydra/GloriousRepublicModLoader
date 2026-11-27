@@ -104,10 +104,20 @@
 					: ''}
 
 			<div class="insp-header">
-				<h2>
-					{selectedSave.displayName || selectedSave.name}
-					<Badge variant={hasIssue ? 'warn' : 'ready'}>{selectedSave.status}</Badge>
-				</h2>
+				<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+					<h2 style="margin:0;">
+						{selectedSave.displayName || selectedSave.name}
+						<Badge variant={hasIssue ? 'warn' : 'ready'}>{selectedSave.status}</Badge>
+					</h2>
+					<Button
+						variant="primary"
+						size="sm"
+						onclick={() => app.launchWrsr(selectedSave.name)}
+						title={`Launch WRSR directly into '${selectedSave.name}'`}
+					>
+						▶ Launch Save
+					</Button>
+				</div>
 				<div class="insp-subline">
 					<span>Folder: {selectedSave.name}</span>
 					<span>·</span>

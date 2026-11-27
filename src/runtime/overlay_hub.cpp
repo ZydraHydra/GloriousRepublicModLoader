@@ -252,6 +252,10 @@ std::atomic<uint8_t>    g_externalMouseButtons{0};
 std::atomic<uint8_t>    g_imguiMouseButtons{0};
 std::atomic<uint16_t>   g_toggleVk{VK_F9};
 std::atomic<const volatile uint8_t*> g_inGameFlagPtr{nullptr};
+DirectSaveLoadTargets                  g_directLoadTargets{};
+std::atomic<bool>                      g_directLoadConfigured{false};
+std::atomic<bool>                      g_directLoadScanCompleted{false};
+std::filesystem::path                  g_gameDir;
 
 std::mutex              g_d3dMutex;
 ID3D11Device*           g_device      = nullptr;
@@ -1834,6 +1838,93 @@ void renderUI()
     }
 }
 
+struct WrsrSaveEntry0x20C {
+    uint32_t flags{0};
+    wchar_t  displayName[128]{};
+    char     relPath[264]{};
+};
+static_assert(sizeof(WrsrSaveEntry0x20C) == 0x20C, "SaveEntry size must match WRSR 0x20C");
+
+bool sehInvokeDirectSaveLoad(const DirectSaveLoadTargets* t,
+                             const wchar_t*               saveFolderW,
+                             const char*                  relPathUtf8,
+                             DWORD*                       outExc) noexcept
+{
+    __try {
+        WrsrSaveEntry0x20C entry{};
+        wcsncpy_s(entry.displayName, _countof(entry.displayName), saveFolderW, _TRUNCATE);
+        strncpy_s(entry.relPath, sizeof(entry.relPath), relPathUtf8, _TRUNCATE);
+
+        auto* dstRel       = reinterpret_cast<char*>(t->mainMenuObj + 0xA20);
+        auto* dstName      = reinterpret_cast<wchar_t*>(t->mainMenuObj + 0x720);
+        auto* dstGlobalRel = const_cast<char*>(reinterpret_cast<volatile char*>(t->loadRequestedPtr + 6));
+        strncpy_s(dstRel, 260, relPathUtf8, _TRUNCATE);
+        wcsncpy_s(dstName, 128, saveFolderW, _TRUNCATE);
+        strncpy_s(dstGlobalRel, 260, relPathUtf8, _TRUNCATE);
+
+        using PFN_LoadSaveHeader = void(__fastcall*)(void* mainMenuObj, const void* saveEntry);
+        auto fn = reinterpret_cast<PFN_LoadSaveHeader>(t->loadSaveHeaderFn);
+        fn(t->mainMenuObj, &entry);
+
+        *reinterpret_cast<uint8_t*>(t->mainMenuObj + 0x10C0) = 0;
+        *t->newGameFlagPtr       = 0;
+        *(t->newGameFlagPtr + 3) = 0;
+        *t->loadRequestedPtr     = 1;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (outExc) *outExc = GetExceptionCode();
+        return false;
+    }
+}
+
+void processPendingDirectSaveLoad()
+{
+    if (!save_events::hasPendingAutoLoad()) return;
+    if (!g_directLoadScanCompleted.load(std::memory_order_acquire)) return;
+
+    if (!g_directLoadConfigured.load(std::memory_order_acquire)) {
+        const std::wstring dropped = save_events::consumePendingAutoLoad();
+        if (!dropped.empty()) {
+            logger::logMessage(GRML_LOG_WARN, "DirectLoad",
+                               "Direct-to-Save disabled (missing signature) — staying at Main Menu");
+        }
+        return;
+    }
+
+    const auto& t = g_directLoadTargets;
+    if (!t.menuActivePtr || !t.mainMenuObj || !t.loadSaveHeaderFn || !t.loadRequestedPtr || !t.newGameFlagPtr) {
+        save_events::consumePendingAutoLoad();
+        return;
+    }
+    if (*t.menuActivePtr == 0 || isGameRunning()) return;
+    const int32_t uiState = *reinterpret_cast<const int32_t*>(t.mainMenuObj + t.uiStateOff);
+    if (uiState != 1 && uiState != 2) return;
+
+    const std::wstring saveFolder = save_events::consumePendingAutoLoad();
+    if (saveFolder.empty()) return;
+
+    std::error_code ec;
+    const std::filesystem::path headerPath = g_gameDir / L"media_soviet" / L"save" / saveFolder / L"header.bin";
+    if (!std::filesystem::exists(headerPath, ec)) {
+        logger::logMessage(GRML_LOG_WARN, "DirectLoad",
+                           "Save '%s' not found on disk (%s) — staying at Main Menu",
+                           wideToUtf8(saveFolder).c_str(),
+                           wideToUtf8(headerPath.wstring()).c_str());
+        return;
+    }
+
+    const std::string relPathUtf8 = "save/" + wideToUtf8(saveFolder);
+    DWORD exc = 0;
+    if (sehInvokeDirectSaveLoad(&t, saveFolder.c_str(), relPathUtf8.c_str(), &exc)) {
+        logger::logMessage(GRML_LOG_INFO, "DirectLoad",
+                           "Triggered direct save load for '%s'", wideToUtf8(saveFolder).c_str());
+    } else {
+        logger::logMessage(GRML_LOG_ERROR, "DirectLoad",
+                           "LoadSaveHeaderAndCheckItems faulted (0x%08lX) for '%s' — staying at Main Menu",
+                           exc, wideToUtf8(saveFolder).c_str());
+    }
+}
+
 HRESULT WINAPI hookedPresent(IDXGISwapChain* sc, UINT syncInterval, UINT flags)
 {
     if (!g_dxInitialized.exchange(true)) {
@@ -1859,6 +1950,7 @@ HRESULT WINAPI hookedPresent(IDXGISwapChain* sc, UINT syncInterval, UINT flags)
         logger::logMessage(GRML_LOG_INFO, "OverlayHub", "DX11 + ImGui F9 Mod Settings hub initialized");
     }
     renderUI();
+    processPendingDirectSaveLoad();
     return g_origPresent(sc, syncInterval, flags);
 }
 
@@ -1935,6 +2027,17 @@ bool installDx11Hooks()
 void setInGameFlagPtr(const volatile uint8_t* ptr) noexcept
 {
     g_inGameFlagPtr.store(ptr, std::memory_order_release);
+}
+
+void setDirectSaveLoadTargets(const DirectSaveLoadTargets& targets,
+                              const std::filesystem::path& gameDir)
+{
+    g_directLoadTargets = targets;
+    g_gameDir           = gameDir;
+    const bool ok = targets.menuActivePtr && targets.mainMenuObj &&
+                    targets.loadSaveHeaderFn && targets.loadRequestedPtr && targets.newGameFlagPtr;
+    g_directLoadConfigured.store(ok, std::memory_order_release);
+    g_directLoadScanCompleted.store(true, std::memory_order_release);
 }
 
 void setPluginsDirectory(const std::filesystem::path& pluginsDir)
