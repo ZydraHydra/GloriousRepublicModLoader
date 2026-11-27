@@ -28,19 +28,18 @@ Thank you for contributing to **GRML**! Please review these guidelines before op
 
 Before submitting a PR:
 
-1. **Native C++20 Build (0 errors):**
+1. **SvelteKit UI Check (`src/launcher-ui/web/`):**
    ```powershell
-   cmake -S . -B build\release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl
-   cmake --build build\release -j
+   cd src/launcher-ui/web
+   npm run check
+   npm run build
    ```
-2. **Deno Desktop Type-Check & Bundle:**
+2. **Full Clean Build (UI + Native C++20 `/MT`):**
    ```powershell
-   cd src/launcher-ui
-   deno check main.ts
-   deno task build
+   .\build.ps1
    ```
 3. **CLI Smoke Check:**
    ```powershell
-   .\build\release\bin\grml_injector.exe --discover
+   .\build\release\GloriousRepublicModLoader.exe --discover
    ```
-   Verify `grml_api_c_check` compiles cleanly and `grml_injector.exe` / `grml_runtime.dll` remain statically linked (`/MT`).
+   Verify `grml_api_c_check` compiles cleanly and `GloriousRepublicModLoader.exe` / `grml_runtime.dll` remain statically linked (`/MT`).

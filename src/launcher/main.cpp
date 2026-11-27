@@ -1,17 +1,18 @@
 // ============================================================================
-// main.cpp — grml_injector.exe CLI engine for Deno Desktop Launcher & scripts
+// main.cpp — GloriousRepublicModLoader.exe native WebView2 host + CLI engine
 // ============================================================================
-// Commands:
-//   grml_injector.exe --discover [--game <path>]   Emit discovery + VFS JSON
-//   grml_injector.exe --launch   [--game <path>]   Launch SOVIET64.exe + inject GRML
-//   grml_injector.exe --status                     Emit running SOVIET64.exe PIDs JSON
-//   grml_injector.exe --crash-events               Emit latest WER crash event JSON
-//   grml_injector.exe --save-vfs                   Save grml_vfs.ini from stdin JSON
-//   grml_injector.exe --save-config                Save grml.ini from stdin JSON
-//   grml_injector.exe --read-ini --ini <path>      Read INI sections + rawText JSON
-//   grml_injector.exe --save-ini                   Update/write INI from stdin JSON
-//   grml_injector.exe --generate-schema            Generate .ui.yaml/.ui.json from stdin JSON
-//   grml_injector.exe                              Same as --launch
+// CLI Commands:
+//   GloriousRepublicModLoader.exe --discover [--game <path>]   Emit discovery + VFS JSON
+//   GloriousRepublicModLoader.exe --launch   [--game <path>]   Launch SOVIET64.exe + inject GRML
+//   GloriousRepublicModLoader.exe --inspect-saves              Scan saves & Workshop diffs
+//   GloriousRepublicModLoader.exe --status                     Emit running SOVIET64.exe PIDs JSON
+//   GloriousRepublicModLoader.exe --crash-events               Emit latest WER crash event JSON
+//   GloriousRepublicModLoader.exe --save-vfs                   Save grml_vfs.ini from stdin JSON
+//   GloriousRepublicModLoader.exe --save-config                Save grml.ini from stdin JSON
+//   GloriousRepublicModLoader.exe --read-ini --ini <path>      Read INI sections + rawText JSON
+//   GloriousRepublicModLoader.exe --save-ini                   Update/write INI from stdin JSON
+//   GloriousRepublicModLoader.exe --generate-schema            Generate .ui.yaml/.ui.json from stdin JSON
+//   GloriousRepublicModLoader.exe (no args)                    Open WebView2 Launcher UI
 // ============================================================================
 #include <windows.h>
 #include <tlhelp32.h>

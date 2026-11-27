@@ -10,7 +10,7 @@ on:
 
 jobs:
   build-x64:
-    name: Build Release x64 (/MT + Deno Desktop)
+    name: Build Release x64 (/MT + WebView2 + SvelteKit)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,10 +19,20 @@ jobs:
         shell: pwsh
         run: choco install ninja -y --no-progress
 
-      - name: Setup Deno
-        uses: denoland/setup-deno@v2
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          deno-version: v2.x
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: src/launcher-ui/web/package-lock.json
+
+      - name: Build SvelteKit UI
+        shell: pwsh
+        working-directory: src/launcher-ui/web
+        run: |
+          npm ci
+          npm run check
+          npm run build
 
       - name: Configure & Build Native C++20 (/MT)
         shell: pwsh
@@ -32,9 +42,9 @@ jobs:
           $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
           $script = @"
           @call "$vcvars" > nul 2>&1
-          cmake -S "$PWD" -B "$PWD/build/release" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl
+          cmake -S "$PWD" -B "$PWD/build/cmake" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl
           if errorlevel 1 exit /b 1
-          cmake --build "$PWD/build/release" -j
+          cmake --build "$PWD/build/cmake" -j
           if errorlevel 1 exit /b 1
           "@
           $bat = Join-Path $env:TEMP "grml_ci_build.bat"
@@ -42,23 +52,15 @@ jobs:
           & cmd.exe /c "`"$bat`""
           if ($LASTEXITCODE -ne 0) { throw "Native build failed" }
 
-      - name: Build Deno Desktop Launcher
-        shell: pwsh
-        working-directory: launcher-ui
-        run: |
-          deno check main.ts
-          deno desktop -A --include ui -o ../build/release/bin/GloriousRepublicModLoader main.ts
-
       - name: Package Release Archive
         shell: pwsh
         run: |
           $ver = (Get-Content VERSION -TotalCount 1).Trim()
           $stage = "build/stage/GRML-v$ver-win64"
-          New-Item -ItemType Directory -Force -Path "$stage/plugins" | Out-Null
-          Copy-Item "build/release/bin/grml_injector.exe" $stage
-          Copy-Item "build/release/bin/grml_runtime.dll" $stage
-          Copy-Item "build/release/bin/grml.ini" $stage
-          Copy-Item -Recurse "build/release/bin/GloriousRepublicModLoader/*" $stage
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "build/cmake/bin/GloriousRepublicModLoader.exe" $stage
+          Copy-Item "build/cmake/bin/grml_runtime.dll" $stage
+          Copy-Item "build/cmake/bin/grml_offsets.ini" $stage
           Copy-Item "LICENSE" $stage
           Compress-Archive -Path "$stage/*" -DestinationPath "build/GRML-v$ver-win64.zip" -Force
 

@@ -3,12 +3,10 @@
 GRML splits responsibilities cleanly between a thin desktop UI, a native Win32 CLI engine, and an injected in-process runtime:
 
 ```text
-GloriousRepublicModLoader.exe (Deno Desktop + WebView2)
-   │  Thin HTTP + static UI bridge (src/launcher-ui/main.ts + ui/*)
-   ▼  stdin/stdout JSON (SUBSYSTEM:WINDOWS, zero console popups)
-grml_injector.exe (src/launcher/)
-   │  • Discovery: plugins, manifests, topo-sort, UI schemas, Media VFS
-   │  • Config I/O: comment-preserving grml.ini, grml_vfs.ini, mod .ini files
+GloriousRepublicModLoader.exe (Native Win32 + WebView2, src/launcher/)
+   │  • Embedded SvelteKit SPA (src/launcher-ui/web/) + in-process HTTP/API
+   │  • Discovery: plugins, manifests, topo-sort, UI schemas, Media VFS, Save Inspector
+   │  • Config I/O: comment-preserving grml.ini, grml_vfs.ini, mod .ini files (%LOCALAPPDATA%\GRML)
    │  • Diagnostics: SOVIET64.exe process status + WER EventID 1000 query
    │  • Injection: CreateProcessW(CREATE_SUSPENDED) -> LoadLibraryW(grml_runtime.dll) -> GrmlBootstrap
    ▼
@@ -24,4 +22,4 @@ grml_runtime.dll (src/runtime/, injected into SOVIET64.exe)
 
 ## Shared Library (`src/common/`)
 
-Both `grml_injector.exe` and `grml_runtime.dll` link against `grml_common` so INI parsing/updating, manifest topological sorting, PE/AOB scanning, declarative/auto-built UI schemas, and Media VFS indexing share a single C++20 implementation with zero logic duplication.
+Both `GloriousRepublicModLoader.exe` and `grml_runtime.dll` link against `grml_common` so INI parsing/updating, manifest topological sorting, PE/AOB scanning, declarative/auto-built UI schemas, and Media VFS indexing share a single C++20 implementation with zero logic duplication.

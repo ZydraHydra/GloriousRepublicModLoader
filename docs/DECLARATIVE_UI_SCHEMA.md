@@ -2,7 +2,7 @@
 
 External mods—including legacy **TesmioLoader**, **RML v1**, and raw native DLLs with **zero GRML C++ SDK integration**—can define a declarative settings UI that works automatically in **both**:
 
-1. The **GRML Deno Desktop Launcher** (before game launch)
+1. The **GRML Launcher** (before game launch)
 2. The **In-Game `F9` Mod Settings Hub** (`grml_runtime.dll`)
 
 Values are read from and saved directly to the mod's `.ini` file (UTF-8 without BOM), preserving all unknown sections and keys.

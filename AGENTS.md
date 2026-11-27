@@ -6,7 +6,7 @@ Read [docs/HOOKING_AND_PERFORMANCE_RULES.md](docs/HOOKING_AND_PERFORMANCE_RULES.
 
 ## 1. Architecture & Backwards-Compatibility Invariants
 
-GRML is the host loader (`GloriousRepublicModLoader` Deno Desktop launcher + `grml_injector.exe` + `grml_runtime.dll`) for **Workers & Resources: Soviet Republic (`SOVIET64.exe` `1.2.0.9+`)** and owns the canonical plugin SDK header (`include/grml_api.h`).
+GRML is the host loader (`GloriousRepublicModLoader.exe` native Win32 + WebView2 launcher + `grml_runtime.dll`) for **Workers & Resources: Soviet Republic (`SOVIET64.exe` `1.2.0.9+`)** and owns the canonical plugin SDK header (`include/grml_api.h`).
 
 1. **100% Backwards Compatibility Required:**
    - Must discover and load **both** `*.grml.json` and legacy `*.rml.json` manifests (and manifestless native DLLs).
@@ -33,15 +33,9 @@ GRML is the host loader (`GloriousRepublicModLoader` Deno Desktop launcher + `gr
 - Enforce every rule in [docs/HOOKING_AND_PERFORMANCE_RULES.md](docs/HOOKING_AND_PERFORMANCE_RULES.md) on all GRML hooks (`CreateFileW` save tracker, DX11 `Present`/`ResizeBuffers`, `DirectInput`/`C3D_INPUT` guards, Workshop forward filter).
 - Externalize all wildcarded AOB patterns in `config/grml_offsets.ini`. Verify exact single-match (`count == 1`) at startup; if an optional pattern misses, log the exact missing pattern name and disable only that feature cleanly.
 - Use wide strings (`std::filesystem::path` / `wchar_t`) and Win32 `*W` APIs for all Workshop (`784150`) and plugin filesystem paths.
-- Support universal declarative mod UI schemas (`*.ui.yaml`, `*.ui.json`, or `"settingsUi"` inside `*.grml.json`/`*.rml.json`, documented in `docs/DECLARATIVE_UI_SCHEMA.md`) in both the Deno Desktop launcher (`src/launcher-ui/`) and in-game `F9`, backed directly by each mod's UTF-8 `.ini` file.
-- **Never deploy or modify Steam Workshop (`784150`) content autonomously:** Never copy binaries, manifests, `.ui.*` files, or `.ini` changes into `steamapps\workshop\content\784150\*` or run Workshop uploads without explicit user confirmation. Keep test deployments inside `build\<config>\bin\plugins\`.
-- Build the native C++20 (`/MT` static CRT) injector and runtime (`grml_injector.exe`, `grml_runtime.dll`) with **CMake**:
+- Support universal declarative mod UI schemas (`*.ui.yaml`, `*.ui.json`, or `"settingsUi"` inside `*.grml.json`/`*.rml.json`, documented in `docs/DECLARATIVE_UI_SCHEMA.md`) in both the SvelteKit launcher UI (`src/launcher-ui/web/`) and in-game `F9`, backed directly by each mod's UTF-8 `.ini` file.
+- **Never deploy or modify Steam Workshop (`784150`) content autonomously:** Never copy binaries, manifests, `.ui.*` files, or `.ini` changes into `steamapps\workshop\content\784150\*` or run Workshop uploads without explicit user confirmation. Keep test deployments inside `build\release\plugins\`.
+- Build the SvelteKit UI + native C++20 (`/MT` static CRT) launcher and runtime (`GloriousRepublicModLoader.exe`, `grml_runtime.dll`, `grml_offsets.ini`) into `build\release\` via:
   ```powershell
-  cmake -S . -B build\release -G Ninja -DCMAKE_BUILD_TYPE=Release
-  cmake --build build\release -j
-  ```
-- Build the Deno Desktop launcher (`build\release\bin\GloriousRepublicModLoader\GloriousRepublicModLoader.exe`) from `src/launcher-ui/`:
-  ```powershell
-  deno check main.ts
-  deno task build
+  .\build.ps1
   ```

@@ -5,7 +5,7 @@
 // Allows ANY external mod (even legacy Tesmio/RML or raw DLLs with zero C++
 // GRML integration) to define a clean UI in `<Mod>.ui.json`, `<Mod>.ui.yaml`,
 // or `"settingsUi"` inside `*.grml.json` / `*.rml.json`.
-// Both the Deno Desktop Launcher and GRML's in-game F9 Mod Settings hub
+// Both the GRML Launcher and GRML's in-game F9 Mod Settings hub
 // auto-render controls and persist values directly to the mod's .ini file.
 // ============================================================================
 #include <filesystem>
@@ -74,7 +74,7 @@ UiSchema discoverModUiSchema(const std::filesystem::path& dllPath,
                              const std::filesystem::path& manifestPath,
                              const std::string& fallbackTabTitle = {});
 
-// Serializes a UiSchema to JSON for the Deno Desktop launcher.
+// Serializes a UiSchema to JSON for the GRML Launcher UI.
 std::string serializeUiSchemaJson(const UiSchema& schema);
 
 } // namespace grml
