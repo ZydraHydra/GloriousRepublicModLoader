@@ -49,6 +49,26 @@
 		if (status === 'MISSING') return 'warn';
 		return 'default';
 	}
+
+	function parseVerifiedBuilds(raw: string): { latest: string; others: string[]; all: string[] } {
+		const list = (raw || '')
+			.split(',')
+			.map((s) => s.trim())
+			.filter(Boolean);
+		if (list.length === 0) return { latest: '—', others: [], all: [] };
+		const cmp = (a: string, b: string) => {
+			const pa = a.split('.').map((n) => parseInt(n, 10) || 0);
+			const pb = b.split('.').map((n) => parseInt(n, 10) || 0);
+			const len = Math.max(pa.length, pb.length);
+			for (let i = 0; i < len; i++) {
+				const diff = (pb[i] ?? 0) - (pa[i] ?? 0);
+				if (diff !== 0) return diff;
+			}
+			return b.localeCompare(a);
+		};
+		const sorted = [...list].sort(cmp);
+		return { latest: sorted[0], others: sorted.slice(1), all: sorted };
+	}
 </script>
 
 <div class="panel offsets-panel">
@@ -125,6 +145,7 @@
 							</thead>
 							<tbody>
 								{#each grp.items as entry (entry.name)}
+									{@const builds = parseVerifiedBuilds(entry.verifiedBuild)}
 									<tr title={entry.anchorXref ? t('diagnostics.anchorTooltip', { anchor: entry.anchorXref }) : ''}>
 										<td>
 											<code>[{entry.name}]</code>
@@ -141,7 +162,24 @@
 											<Badge variant={offsetBadgeVariant(entry.status)}>{entry.status}</Badge>
 										</td>
 										<td><code>{entry.resolve}</code></td>
-										<td>{entry.verifiedBuild || '—'}</td>
+										<td>
+											{#if builds.all.length <= 1}
+												<span>{builds.latest}</span>
+											{:else}
+												<span class="build-cell">
+													<span>{builds.latest}</span>
+													<span
+														class="build-more"
+														title={builds.all.join(', ')}
+													>
+														+{builds.others.length}
+														<span class="build-popover" role="tooltip">
+															{builds.all.join(', ')}
+														</span>
+													</span>
+												</span>
+											{/if}
+										</td>
 										<td>
 											{#if entry.status === 'OK' || entry.status === 'CACHED'}
 												<code>{entry.rva || '—'}</code>
@@ -188,7 +226,7 @@
 		gap: 10px;
 	}
 	.offsets-table-wrap {
-		overflow-x: auto;
+		overflow: visible;
 	}
 	.offsets-table {
 		width: 100%;
@@ -231,5 +269,47 @@
 	}
 	.offsets-table tr:last-child td {
 		border-bottom: none;
+	}
+	.build-cell {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		white-space: nowrap;
+	}
+	.build-more {
+		position: relative;
+		display: inline-flex;
+		align-items: center;
+		padding: 1px 5px;
+		border-radius: 999px;
+		font-size: 10px;
+		font-weight: 600;
+		line-height: 1.3;
+		color: var(--gold, #e5b84b);
+		background: rgba(229, 184, 75, 0.14);
+		border: 1px solid rgba(229, 184, 75, 0.35);
+		cursor: help;
+	}
+	.build-popover {
+		display: none;
+		position: absolute;
+		bottom: calc(100% + 6px);
+		left: 50%;
+		transform: translateX(-50%);
+		z-index: 20;
+		white-space: nowrap;
+		padding: 4px 8px;
+		border-radius: 6px;
+		font-size: 11px;
+		font-weight: 500;
+		color: var(--text, #e8e9ec);
+		background: #17191f;
+		border: 1px solid rgba(255, 255, 255, 0.14);
+		box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+		pointer-events: none;
+	}
+	.build-more:hover .build-popover,
+	.build-more:focus-visible .build-popover {
+		display: block;
 	}
 </style>
