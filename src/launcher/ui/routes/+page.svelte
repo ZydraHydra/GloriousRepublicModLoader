@@ -197,18 +197,18 @@
 		<aside class="sidebar">
 			<button
 				class="nav-btn"
-				class:active={app.activeView === 'playlists'}
-				onclick={() => app.switchView('playlists')}
-			>
-				{t('nav.playlists')}
-			</button>
-			<button
-				class="nav-btn"
 				class:active={app.activeView === 'mods'}
 				onclick={() => app.switchView('mods')}
 			>
 				<span>{t('nav.mods')}</span>
 				<span class="count-pill">{enabledCount}/{totalCount}</span>
+			</button>
+			<button
+				class="nav-btn"
+				class:active={app.activeView === 'playlists'}
+				onclick={() => app.switchView('playlists')}
+			>
+				{t('nav.playlists')}
 			</button>
 			<button
 				class="nav-btn"
