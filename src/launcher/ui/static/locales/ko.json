@@ -36,7 +36,7 @@
 	},
 	"nav": {
 		"playlists": "재생목록",
-		"mods": "모드 및 로드 순서",
+		"mods": "모드",
 		"overrides": "에셋 덮어쓰기",
 		"saves": "저장 파일 검사기",
 		"offsets": "오프셋 및 서명",

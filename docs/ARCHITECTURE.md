@@ -30,7 +30,7 @@ grml_runtime.dll (src/runtime/, injected into SOVIET64.exe)
 
 | View file | Nav label | Purpose |
 |---|---|---|
-| `ModsView.svelte` | Mods & Load Order | Enable/disable/reorder plugins, version badges, dependency checks |
+| `ModsView.svelte` | Mods | Enable/disable plugins, version badges, dependency & offset checks |
 | `PlaylistsView.svelte` | Playlists | Save/restore mod selection presets |
 | `OverridesView.svelte` | Asset Overrides | Media VFS pack priority & conflict inspection |
 | `SaveInspectorView.svelte` | Save Inspector | Scan saves, spot missing Workshop IDs, direct-to-save launch |

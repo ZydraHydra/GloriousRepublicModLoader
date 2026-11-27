@@ -36,7 +36,7 @@
 	},
 	"nav": {
 		"playlists": "模組清單",
-		"mods": "模組與載入順序",
+		"mods": "模組",
 		"overrides": "資源覆蓋",
 		"saves": "存檔檢查器",
 		"offsets": "偏移與簽章",

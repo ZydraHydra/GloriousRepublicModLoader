@@ -36,7 +36,7 @@
 	},
 	"nav": {
 		"playlists": "プレイリスト",
-		"mods": "Mod とロード順",
+		"mods": "Mod",
 		"overrides": "アセット上書き",
 		"saves": "セーブインスペクタ",
 		"offsets": "オフセットと署名",

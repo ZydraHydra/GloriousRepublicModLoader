@@ -199,7 +199,7 @@ try {
     await sleep(300);
   };
 
-  await clickNav("Mods & Load Order");
+  await clickNav("Mods");
   await cdp.eval(`document.querySelector('.mod-row')?.click()`);
   await sleep(400);
   await cdp.screenshot(join(outDir, "01_mods.png"));

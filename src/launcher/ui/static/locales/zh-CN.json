@@ -36,7 +36,7 @@
 	},
 	"nav": {
 		"playlists": "模组列表",
-		"mods": "模组与加载顺序",
+		"mods": "模组",
 		"overrides": "资源覆盖",
 		"saves": "存档检查器",
 		"offsets": "偏移与签名",

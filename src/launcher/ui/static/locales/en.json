@@ -36,7 +36,7 @@
 	},
 	"nav": {
 		"playlists": "Playlists",
-		"mods": "Mods & Load Order",
+		"mods": "Mods",
 		"overrides": "Asset Overrides",
 		"saves": "Save Inspector",
 		"offsets": "Offsets & Signatures",

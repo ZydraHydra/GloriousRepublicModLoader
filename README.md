@@ -4,7 +4,7 @@
 
 GRML lets you manage Steam Workshop (`784150`) and local DLL mods, tweak mod `.ini` settings from a clean UI or **in-game**, layer non-destructive asset packs, and diagnose crashes or missing Workshop items in your saves—while staying **100% compatible** with existing **RML v1**, **TesmioLoader v3/v4**, and standalone DLL mods.
 
-![GRML Launcher — Mods & Load Order](docs/screenshots/01_mods.png)
+![GRML Launcher — Mods](docs/screenshots/01_mods.png)
 
 ---
 
@@ -44,7 +44,7 @@ GRML lets you manage Steam Workshop (`784150`) and local DLL mods, tweak mod `.i
 1. Download and extract the latest **GRML** release (`GloriousRepublicModLoader.exe`, `grml_runtime.dll`, `grml_offsets.ini`) to any folder.
 2. Run **`GloriousRepublicModLoader.exe`**.
 3. Check the detected WRSR version in the top bar (if your game is in a custom location, set `SOVIET64.exe` under **Settings**).
-4. Enable the mods you want in **Mods & Load Order** (and configure any optional packs in **Asset Overrides**).
+4. Enable the mods you want in **Mods** (and configure any optional packs in **Asset Overrides**).
 5. Click **▶ Launch WRSR** (or **▶ Continue `<SaveName>`** to load your latest save directly). Press **`F9`** (or your custom hotkey) in-game to open **GRML Mod Settings**.
 
 ### Where Your Data Is Stored
