@@ -105,6 +105,14 @@
 					</div>
 					<div class="offsets-table-wrap">
 						<table class="offsets-table">
+							<colgroup>
+								<col class="col-section" />
+								<col class="col-tier" />
+								<col class="col-status" />
+								<col class="col-resolve" />
+								<col class="col-build" />
+								<col class="col-target" />
+							</colgroup>
 							<thead>
 								<tr>
 									<th>{t('diagnostics.colSection')}</th>
@@ -184,14 +192,36 @@
 	}
 	.offsets-table {
 		width: 100%;
+		min-width: 720px;
+		table-layout: fixed;
 		border-collapse: collapse;
 		font-size: 12px;
+	}
+	.offsets-table col.col-section {
+		width: 30%;
+	}
+	.offsets-table col.col-tier {
+		width: 11%;
+	}
+	.offsets-table col.col-status {
+		width: 11%;
+	}
+	.offsets-table col.col-resolve {
+		width: 15%;
+	}
+	.offsets-table col.col-build {
+		width: 15%;
+	}
+	.offsets-table col.col-target {
+		width: 18%;
 	}
 	.offsets-table th,
 	.offsets-table td {
 		text-align: left;
 		padding: 6px 8px;
 		border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+		overflow-wrap: anywhere;
+		vertical-align: middle;
 	}
 	.offsets-table th {
 		font-size: 10px;
