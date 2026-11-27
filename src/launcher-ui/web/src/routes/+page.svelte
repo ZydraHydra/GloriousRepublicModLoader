@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { app } from '$lib/stores/app.svelte';
+	import { openExternalUrl } from '$lib/utils';
 	import { Button } from '$lib/components/ui';
 	import PlaylistsView from '$lib/views/PlaylistsView.svelte';
 	import ModsView from '$lib/views/ModsView.svelte';
@@ -39,7 +40,9 @@
 	}
 
 	onMount(() => {
-		app.fetchState();
+		app.fetchState().then(() => {
+			app.checkForUpdates(false);
+		});
 		return () => {
 			if (audioEl) {
 				audioEl.pause();
@@ -103,6 +106,15 @@
 		</div>
 
 		<div class="game-bar">
+			{#if app.updateInfo?.updateAvailable && app.updateInfo.releaseUrl}
+				<Button
+					size="sm"
+					title={`New GRML release v${app.updateInfo.latestVersion} available on GitHub`}
+					onclick={() => openExternalUrl(app.updateInfo!.releaseUrl!)}
+				>
+					Update v{app.updateInfo.latestVersion} ↗
+				</Button>
+			{/if}
 			<span class="pill" title={app.discovery?.gameExe || 'Game executable not detected'}>{verLabel}</span>
 			<Button variant="primary" onclick={() => app.launchWrsr()}>▶ Launch WRSR</Button>
 		</div>

@@ -147,6 +147,18 @@ export interface SavesResponse {
 	saves: SaveEntry[];
 }
 
+export interface UpdateCheckInfo {
+	ok: boolean;
+	currentVersion: string;
+	latestVersion?: string;
+	tagName?: string;
+	releaseName?: string;
+	releaseUrl?: string;
+	updateAvailable?: boolean;
+	noReleases?: boolean;
+	error?: string;
+}
+
 class AppStore {
 	activeView = $state<ViewId>('mods');
 	statusToast = $state('Ready.');
@@ -182,6 +194,11 @@ class AppStore {
 	lastCrashSaveName = $state('');
 	crashBannerVisible = $state(false);
 	launchWatchUntil = $state(0);
+
+	// Update check state
+	updateInfo = $state<UpdateCheckInfo | null>(null);
+	checkingUpdate = $state(false);
+
 	private diagPollInFlight = false;
 	private diagTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -343,6 +360,30 @@ class AppStore {
 				this.pollDiagnostics(false, false);
 			}
 		}, 5000);
+	}
+
+	async checkForUpdates(manual = false) {
+		if (this.checkingUpdate) return;
+		this.checkingUpdate = true;
+		if (manual) this.setStatus('Checking GitHub for updates...');
+		try {
+			const resp = await fetch('/api/check-update');
+			const data = (await resp.json()) as UpdateCheckInfo;
+			this.updateInfo = data;
+			if (manual) {
+				if (!data.ok) {
+					this.setStatus(`Update check failed: ${data.error || 'Offline'}`);
+				} else if (data.updateAvailable) {
+					this.setStatus(`Update available: v${data.latestVersion}`);
+				} else {
+					this.setStatus(`GRML v${data.currentVersion} is up to date.`);
+				}
+			}
+		} catch {
+			if (manual) this.setStatus('Update check failed (offline).');
+		} finally {
+			this.checkingUpdate = false;
+		}
 	}
 
 	async launchWrsr() {

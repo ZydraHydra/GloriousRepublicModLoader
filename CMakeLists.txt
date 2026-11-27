@@ -188,6 +188,7 @@ target_link_libraries(grml_injector PRIVATE
     shlwapi
     version
     wevtapi
+    winhttp
 )
 set_target_properties(grml_injector PROPERTIES
     OUTPUT_NAME "GloriousRepublicModLoader"

@@ -9,6 +9,7 @@
 #include <ws2tcpip.h>
 #include <commdlg.h>
 #include <shellapi.h>
+#include <winhttp.h>
 
 #include <atomic>
 #include <chrono>
@@ -150,6 +151,140 @@ std::string toLowerAscii(std::string s)
         if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + ('a' - 'A'));
     }
     return s;
+}
+
+std::vector<int> parseSemverParts(std::string_view v)
+{
+    if (!v.empty() && (v[0] == 'v' || v[0] == 'V')) v.remove_prefix(1);
+    std::vector<int> parts;
+    size_t i = 0;
+    while (i < v.size()) {
+        if (v[i] < '0' || v[i] > '9') {
+            if (v[i] == '-') break;
+            ++i;
+            continue;
+        }
+        int num = 0;
+        while (i < v.size() && v[i] >= '0' && v[i] <= '9') {
+            num = num * 10 + (v[i] - '0');
+            ++i;
+        }
+        parts.push_back(num);
+    }
+    return parts;
+}
+
+bool isNewerSemver(std::string_view candidate, std::string_view current)
+{
+    const auto a = parseSemverParts(candidate);
+    const auto b = parseSemverParts(current);
+    const size_t n = std::max(a.size(), b.size());
+    for (size_t i = 0; i < n; ++i) {
+        const int av = (i < a.size()) ? a[i] : 0;
+        const int bv = (i < b.size()) ? b[i] : 0;
+        if (av != bv) return av > bv;
+    }
+    return false;
+}
+
+std::string checkGitHubReleaseJson()
+{
+    const std::string curVer = GRML_BUILD_VERSION;
+    const std::wstring ua = L"GloriousRepublicModLoader/" + grml::utf8ToWide(curVer);
+
+    HINTERNET hSession = WinHttpOpen(ua.c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) {
+        return "{\"ok\":false,\"currentVersion\":\"" + grml::launcher_api::jsonEscape(curVer) +
+               "\",\"error\":\"WinHttpOpen failed\"}";
+    }
+    WinHttpSetTimeouts(hSession, 4000, 4000, 4000, 5000);
+
+    HINTERNET hConnect = WinHttpConnect(hSession, L"api.github.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
+    if (!hConnect) {
+        WinHttpCloseHandle(hSession);
+        return "{\"ok\":false,\"currentVersion\":\"" + grml::launcher_api::jsonEscape(curVer) +
+               "\",\"error\":\"Failed to connect to GitHub\"}";
+    }
+
+    HINTERNET hRequest = WinHttpOpenRequest(
+        hConnect, L"GET",
+        L"/repos/ZydraHydra/GloriousRepublicModLoader/releases/latest",
+        nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+    if (!hRequest) {
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return "{\"ok\":false,\"currentVersion\":\"" + grml::launcher_api::jsonEscape(curVer) +
+               "\",\"error\":\"WinHttpOpenRequest failed\"}";
+    }
+
+    const wchar_t* hdrs = L"Accept: application/vnd.github+json\r\n";
+    BOOL sent = WinHttpSendRequest(hRequest, hdrs, static_cast<DWORD>(-1L),
+                                   WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+    if (sent) sent = WinHttpReceiveResponse(hRequest, nullptr);
+
+    DWORD statusCode = 0;
+    DWORD szStatus   = sizeof(statusCode);
+    if (sent) {
+        WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &szStatus, WINHTTP_NO_HEADER_INDEX);
+    }
+
+    std::string body;
+    if (sent && statusCode == 200) {
+        DWORD avail = 0;
+        while (WinHttpQueryDataAvailable(hRequest, &avail) && avail > 0) {
+            std::string chunk(avail, '\0');
+            DWORD read = 0;
+            if (WinHttpReadData(hRequest, chunk.data(), avail, &read) && read > 0) {
+                chunk.resize(read);
+                body += chunk;
+            } else {
+                break;
+            }
+            if (body.size() > 512 * 1024) break;
+        }
+    }
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+
+    if (!sent) {
+        return "{\"ok\":false,\"currentVersion\":\"" + grml::launcher_api::jsonEscape(curVer) +
+               "\",\"error\":\"GitHub request failed\"}";
+    }
+    if (statusCode == 404) {
+        return "{\"ok\":true,\"currentVersion\":\"" + grml::launcher_api::jsonEscape(curVer) +
+               "\",\"latestVersion\":\"" + grml::launcher_api::jsonEscape(curVer) +
+               "\",\"updateAvailable\":false,\"noReleases\":true,"
+               "\"releaseUrl\":\"https://github.com/ZydraHydra/GloriousRepublicModLoader/releases\"}";
+    }
+    if (statusCode != 200) {
+        return "{\"ok\":false,\"currentVersion\":\"" + grml::launcher_api::jsonEscape(curVer) +
+               "\",\"error\":\"GitHub HTTP " + std::to_string(statusCode) + "\"}";
+    }
+
+    const auto parsed = grml::parseJson(body);
+    if (!parsed || !parsed->isObject()) {
+        return "{\"ok\":false,\"currentVersion\":\"" + grml::launcher_api::jsonEscape(curVer) +
+               "\",\"error\":\"Invalid GitHub response\"}";
+    }
+    std::string tag = parsed->get("tag_name") ? parsed->get("tag_name")->asString() : "";
+    std::string latest = tag;
+    if (!latest.empty() && (latest[0] == 'v' || latest[0] == 'V')) latest.erase(0, 1);
+    const std::string htmlUrl = parsed->get("html_url")
+        ? parsed->get("html_url")->asString()
+        : "https://github.com/ZydraHydra/GloriousRepublicModLoader/releases";
+    const std::string relName = parsed->get("name") ? parsed->get("name")->asString() : tag;
+    const bool newer = !latest.empty() && isNewerSemver(latest, curVer);
+
+    return "{\"ok\":true,\"currentVersion\":\"" + grml::launcher_api::jsonEscape(curVer) +
+           "\",\"latestVersion\":\"" + grml::launcher_api::jsonEscape(latest.empty() ? curVer : latest) +
+           "\",\"tagName\":\"" + grml::launcher_api::jsonEscape(tag) +
+           "\",\"releaseName\":\"" + grml::launcher_api::jsonEscape(relName) +
+           "\",\"releaseUrl\":\"" + grml::launcher_api::jsonEscape(htmlUrl) +
+           "\",\"updateAvailable\":" + std::string(newer ? "true" : "false") + "}";
 }
 
 std::string buildSuspectsJson(const std::vector<std::string>& logTail,
@@ -373,6 +508,8 @@ void handleClient(SOCKET client)
             ",\"logTail\":" + logJson +
             ",\"playlists\":" + playlistsJson + "}";
         sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8", resp);
+    } else if (method == "GET" && path == "/api/check-update") {
+        sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8", checkGitHubReleaseJson());
     } else if (method == "GET" && path == "/api/saves") {
         std::lock_guard lock(g_apiMutex);
         const auto it = query.find("game");
@@ -505,7 +642,8 @@ void handleClient(SOCKET client)
         const auto root = grml::parseJson(body);
         const std::string openUrl = (root && root->get("url")) ? root->get("url")->asString() : "";
         if (openUrl.rfind("https://steamcommunity.com/", 0) != 0 &&
-            openUrl.rfind("steam://url/CommunityFilePage/", 0) != 0) {
+            openUrl.rfind("steam://url/CommunityFilePage/", 0) != 0 &&
+            openUrl.rfind("https://github.com/ZydraHydra/GloriousRepublicModLoader", 0) != 0) {
             sendHttpResponse(client, 400, "Bad Request", "application/json", "{\"ok\":false,\"error\":\"Unsupported URL\"}");
         } else {
             ShellExecuteW(nullptr, L"open", grml::utf8ToWide(openUrl).c_str(), nullptr, nullptr, SW_SHOWNORMAL);

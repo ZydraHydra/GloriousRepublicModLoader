@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { app } from '$lib/stores/app.svelte';
-	import { Button, PanelCard, Select, TextInput, ToggleSwitch } from '$lib/components/ui';
+	import { openExternalUrl } from '$lib/utils';
+	import { Badge, Button, PanelCard, Select, TextInput, ToggleSwitch } from '$lib/components/ui';
 
 	let listeningHotkey = $state(false);
 
@@ -164,6 +165,43 @@
 			</div>
 			<div class="control-tip">
 				Appends <code>| GRML 2.0.0</code> to the in-game main menu version string so you can confirm GRML is active.
+			</div>
+		</PanelCard>
+
+		<PanelCard>
+			<div class="control-top">
+				<div class="control-label">
+					Launcher Updates
+					{#if app.discovery?.loaderVersion}
+						<span class="muted" style="font-weight:400;margin-left:6px;">v{app.discovery.loaderVersion}</span>
+					{/if}
+				</div>
+				<div style="display:flex;align-items:center;gap:8px;">
+					{#if app.updateInfo?.ok}
+						{#if app.updateInfo.updateAvailable}
+							<Badge variant="grml">Update v{app.updateInfo.latestVersion}</Badge>
+							{#if app.updateInfo.releaseUrl}
+								<Button
+									variant="primary"
+									size="sm"
+									onclick={() => openExternalUrl(app.updateInfo!.releaseUrl!)}
+								>
+									Download ↗
+								</Button>
+							{/if}
+						{:else}
+							<Badge variant="ready">Up to date</Badge>
+						{/if}
+					{:else if app.updateInfo && !app.updateInfo.ok}
+						<Badge variant="warn">{app.updateInfo.error || 'Check failed'}</Badge>
+					{/if}
+					<Button size="sm" disabled={app.checkingUpdate} onclick={() => app.checkForUpdates(true)}>
+						{app.checkingUpdate ? 'Checking...' : 'Check for Updates'}
+					</Button>
+				</div>
+			</div>
+			<div class="control-tip">
+				Checks <code>ZydraHydra/GloriousRepublicModLoader</code> releases on GitHub against your installed version.
 			</div>
 		</PanelCard>
 	</div>
