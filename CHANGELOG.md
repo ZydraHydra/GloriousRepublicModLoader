@@ -11,6 +11,11 @@
 - **`docs/OFFSET_CATALOG.md`:** New full catalog doc listing all 31 declared offsets across the 6 categories with descriptions, ABI fields, and version coverage.
 - **21 locale files updated** with `nav.offsets` translation key for the new nav tab.
 
+### Automatic Savegame Backups
+- **Pre-launch savegame backup & rotation:** Automatically copies `media_soviet\save` (or `dev_save_path` when enabled) before launching WRSR into per-game-version folders (`<backupRoot>\<gameVersion>\save_backup_YYYY-MM-DD_HH-MM-SS\`) so switching WRSR versions never overwrites backups.
+- **Progress modal (`/api/backup-progress`):** Displays a live progress bar, file/byte counters, and current file status while backing up saves prior to launch.
+- **Configurable retention & destination:** Added `auto_backup_saves = 1`, `max_save_backups = 3`, and `save_backup_path` (defaults to `%LOCALAPPDATA%\GRML\save_backups`) to `grml.ini` and **Loader Settings**.
+
 ### Launcher Fixes
 - **Full reload on game executable change:** Changing `SOVIET64.exe` in Settings now reloads mods, VFS overrides, offsets, playlists, and Save Inspector entries together (`reloadForGameExe()`).
 - **Mod Inspector tab switching:** Fixed switching back from **Raw INI** to **Settings** in `ModInspector.svelte` by replacing `$bindable` mutations on uninitialized `fieldValues` keys with explicit value/event bindings, wrapping the Raw INI view in a single root container, and keying `Select` options by index + value.

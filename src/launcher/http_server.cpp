@@ -1326,6 +1326,9 @@ void handleClient(SOCKET client)
         const std::string resJson = fetchSteamCollectionJson(colInput, status);
         sendHttpResponse(client, status, status == 200 ? "OK" : "Error",
                          "application/json; charset=utf-8", resJson);
+    } else if (method == "GET" && path == "/api/backup-progress") {
+        sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8",
+                         grml::launcher_api::buildBackupProgressJson());
     } else if (method == "POST" && path == "/api/launch") {
         std::lock_guard lock(g_apiMutex);
         const auto req = grml::parseJson(body);

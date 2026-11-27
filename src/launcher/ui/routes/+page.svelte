@@ -31,6 +31,22 @@
 			(m) => m.enabled && !m.blocked && m.offsetCompatibility === 'needs_update'
 		)
 	);
+	const backupPercent = $derived.by(() => {
+		const bp = app.backupProgress;
+		if (!bp) return 0;
+		if (bp.phase === 'pruning' || bp.phase === 'done') return 100;
+		if (bp.totalBytes > 0) return Math.min(100, Math.round((bp.copiedBytes / bp.totalBytes) * 100));
+		if (bp.totalFiles > 0) return Math.min(100, Math.round((bp.completedFiles / bp.totalFiles) * 100));
+		return 0;
+	});
+
+	function formatBytes(bytes: number): string {
+		if (bytes < 1024) return `${bytes} B`;
+		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+		if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+		return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+	}
+
 	let offsetBannerDismissed = $state(false);
 
 	let playingInternationale = $state(false);
@@ -283,6 +299,52 @@
 			</section>
 		</main>
 	</div>
+
+	{#if app.launching && app.backupProgress}
+		{@const bp = app.backupProgress}
+		<div class="backup-modal-backdrop" role="dialog" aria-modal="true" aria-label={t('backupModal.title')}>
+			<div class="backup-modal-card">
+				<div class="backup-modal-header">
+					<span class="backup-modal-title">{t('backupModal.title')}</span>
+					{#if bp.phase === 'copying' || bp.phase === 'pruning' || bp.phase === 'done'}
+						<span class="backup-modal-pct">{backupPercent}%</span>
+					{/if}
+				</div>
+				<div class="backup-modal-status">
+					{#if bp.phase === 'scanning'}
+						{t('backupModal.scanning')}
+					{:else if bp.phase === 'copying'}
+						{t('backupModal.copying')}
+					{:else if bp.phase === 'pruning'}
+						{t('backupModal.pruning')}
+					{:else}
+						{t('backupModal.preparing')}
+					{/if}
+				</div>
+				<div class="backup-progress-track">
+					{#if bp.phase === 'scanning'}
+						<div class="backup-progress-fill indeterminate"></div>
+					{:else}
+						<div class="backup-progress-fill" style="width: {backupPercent}%"></div>
+					{/if}
+				</div>
+				{#if bp.totalFiles > 0}
+					<div class="backup-modal-meta">
+						<span>
+							{t('backupModal.filesProgress', {
+								done: bp.completedFiles,
+								total: bp.totalFiles
+							})}
+						</span>
+						<span>{formatBytes(bp.copiedBytes)} / {formatBytes(bp.totalBytes)}</span>
+					</div>
+				{/if}
+				{#if bp.currentItem}
+					<div class="backup-modal-file" title={bp.currentItem}>{bp.currentItem}</div>
+				{/if}
+			</div>
+		</div>
+	{/if}
 </div>
 
 <style>
@@ -328,5 +390,85 @@
 		align-items: center;
 		justify-content: center;
 		background: #a81c18;
+	}
+	.backup-modal-backdrop {
+		position: fixed;
+		inset: 0;
+		z-index: 9999;
+		background: rgba(10, 11, 14, 0.76);
+		backdrop-filter: blur(4px);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 20px;
+	}
+	.backup-modal-card {
+		width: min(460px, 100%);
+		background: #17191e;
+		border: 1px solid rgba(214, 166, 69, 0.45);
+		border-radius: 10px;
+		padding: 18px 20px;
+		box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6);
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+	}
+	.backup-modal-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+	}
+	.backup-modal-title {
+		font-size: 15px;
+		font-weight: 700;
+		color: #f3eee2;
+	}
+	.backup-modal-pct {
+		font-size: 13px;
+		font-weight: 700;
+		color: var(--gold);
+		font-variant-numeric: tabular-nums;
+	}
+	.backup-modal-status {
+		font-size: 13px;
+		color: rgba(243, 238, 226, 0.82);
+	}
+	.backup-progress-track {
+		width: 100%;
+		height: 8px;
+		border-radius: 999px;
+		background: rgba(255, 255, 255, 0.08);
+		overflow: hidden;
+	}
+	.backup-progress-fill {
+		height: 100%;
+		background: linear-gradient(90deg, #b8882d, #e4b85c);
+		border-radius: 999px;
+		transition: width 0.12s ease-out;
+	}
+	.backup-progress-fill.indeterminate {
+		width: 40%;
+		animation: backup-indeterminate 1.1s infinite ease-in-out;
+	}
+	@keyframes backup-indeterminate {
+		0% { transform: translateX(-110%); }
+		100% { transform: translateX(260%); }
+	}
+	.backup-modal-meta {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		font-size: 12px;
+		color: rgba(243, 238, 226, 0.65);
+		font-variant-numeric: tabular-nums;
+	}
+	.backup-modal-file {
+		font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+		font-size: 11px;
+		color: rgba(243, 238, 226, 0.55);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 </style>

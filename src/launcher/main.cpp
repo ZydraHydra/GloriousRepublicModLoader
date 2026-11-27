@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
+#include <mutex>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -1272,6 +1273,210 @@ std::string buildStatusJson()
 
 std::string buildCrashEventsJson() { return ::buildCrashEventsJsonStr(); }
 
+namespace {
+
+struct BackupProgressState {
+    bool        active{false};
+    std::string phase{"idle"};
+    size_t      completedFiles{0};
+    size_t      totalFiles{0};
+    uint64_t    copiedBytes{0};
+    uint64_t    totalBytes{0};
+    std::string currentItem;
+};
+
+std::mutex          g_backupProgressMutex;
+BackupProgressState g_backupProgress;
+
+void setBackupProgress(bool active,
+                       const char* phase,
+                       size_t completedFiles,
+                       size_t totalFiles,
+                       uint64_t copiedBytes,
+                       uint64_t totalBytes,
+                       std::string currentItem)
+{
+    std::lock_guard lock(g_backupProgressMutex);
+    g_backupProgress.active         = active;
+    g_backupProgress.phase          = phase ? phase : "idle";
+    g_backupProgress.completedFiles = completedFiles;
+    g_backupProgress.totalFiles     = totalFiles;
+    g_backupProgress.copiedBytes    = copiedBytes;
+    g_backupProgress.totalBytes     = totalBytes;
+    g_backupProgress.currentItem    = std::move(currentItem);
+}
+
+bool isSubPathOrSame(const std::filesystem::path& candidate, const std::filesystem::path& base)
+{
+    std::error_code ec;
+    const auto cNorm = std::filesystem::weakly_canonical(candidate, ec).lexically_normal();
+    const auto bNorm = std::filesystem::weakly_canonical(base, ec).lexically_normal();
+    if (cNorm.empty() || bNorm.empty()) return false;
+    auto cIt = cNorm.begin();
+    auto bIt = bNorm.begin();
+    for (; bIt != bNorm.end(); ++bIt, ++cIt) {
+        if (cIt == cNorm.end()) return false;
+        if (_wcsicmp(cIt->c_str(), bIt->c_str()) != 0) return false;
+    }
+    return true;
+}
+
+std::wstring resolveBackupGameVersionDir(const std::filesystem::path& loaderDir,
+                                         const std::filesystem::path& dataDir,
+                                         const std::filesystem::path& gameExe)
+{
+    std::string ver;
+    const std::string gameSha = grml::computeFileSha256(gameExe);
+    if (!gameSha.empty()) {
+        grml::IniFile offsets;
+        uint64_t      offsetsHash = 0;
+        grml::offsets::loadMergedOffsetsIni(loaderDir, dataDir, grml::generated::kEmbeddedGrmlOffsetsIni,
+                                            offsets, offsetsHash);
+        ver = offsets.getString("builds", gameSha, "");
+    }
+    if (ver.empty() || ver == "unknown") {
+        const std::string peVer = grml::readPeFileVersion(gameExe);
+        if (!peVer.empty()) ver = peVer;
+    }
+    if (ver.empty()) ver = "unknown";
+    for (char& ch : ver) {
+        if (ch == '\\' || ch == '/' || ch == ':' || ch == '*' || ch == '?' ||
+            ch == '"' || ch == '<' || ch == '>' || ch == '|') {
+            ch = '_';
+        }
+    }
+    return grml::utf8ToWide(ver);
+}
+
+void backupSavesBeforeLaunch(const std::filesystem::path& loaderDir,
+                             const std::filesystem::path& dataDir,
+                             const std::filesystem::path& gameExe,
+                             const grml::IniFile& cfg)
+{
+    if (!cfg.getBool("general", "auto_backup_saves", true)) return;
+    if (gameExe.empty()) return;
+
+    std::error_code ec;
+    const std::filesystem::path gameDir  = gameExe.parent_path();
+    const std::filesystem::path saveRoot = grml::resolveEffectiveGamePaths(gameDir, cfg).saveRoot;
+    if (saveRoot.empty() || !std::filesystem::is_directory(saveRoot, ec)) return;
+
+    const std::string customPath = cfg.getString("general", "save_backup_path", "");
+    std::filesystem::path baseBackupRoot = customPath.empty()
+        ? (dataDir / L"save_backups")
+        : std::filesystem::path(grml::utf8ToWide(customPath));
+    if (baseBackupRoot.empty()) baseBackupRoot = dataDir / L"save_backups";
+
+    // Prevent recursive backup loops if baseBackupRoot is inside saveRoot
+    if (isSubPathOrSame(baseBackupRoot, saveRoot)) return;
+
+    const std::filesystem::path backupRoot =
+        baseBackupRoot / resolveBackupGameVersionDir(loaderDir, dataDir, gameExe);
+
+    struct BackupGuard {
+        ~BackupGuard() { setBackupProgress(false, "done", 0, 0, 0, 0, ""); }
+    } guard;
+
+    setBackupProgress(true, "scanning", 0, 0, 0, 0, "");
+
+    struct CopyItem {
+        std::filesystem::path src;
+        std::filesystem::path rel;
+        uint64_t              size{0};
+    };
+    std::vector<std::filesystem::path> dirs;
+    std::vector<CopyItem>              files;
+    uint64_t                           totalBytes = 0;
+
+    for (const auto& ent : std::filesystem::recursive_directory_iterator(saveRoot, ec)) {
+        std::error_code relEc;
+        const auto rel = std::filesystem::relative(ent.path(), saveRoot, relEc);
+        if (relEc || rel.empty()) continue;
+        if (ent.is_directory(ec)) {
+            dirs.push_back(rel);
+        } else if (ent.is_regular_file(ec)) {
+            const uint64_t sz = ent.file_size(ec);
+            totalBytes += sz;
+            files.push_back({ent.path(), rel, sz});
+        }
+    }
+    if (files.empty() && dirs.empty()) return;
+
+    std::filesystem::create_directories(backupRoot, ec);
+    if (ec) return;
+
+    SYSTEMTIME st{};
+    GetLocalTime(&st);
+    wchar_t stampBuf[64]{};
+    swprintf_s(stampBuf, L"save_backup_%04u-%02u-%02u_%02u-%02u-%02u",
+               st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+
+    std::filesystem::path targetDir = backupRoot / stampBuf;
+    for (int suffix = 1; std::filesystem::exists(targetDir, ec) && suffix < 100; ++suffix) {
+        targetDir = backupRoot / (std::wstring(stampBuf) + L"_" + std::to_wstring(suffix));
+    }
+
+    std::filesystem::create_directories(targetDir, ec);
+    if (ec) return;
+    for (const auto& d : dirs) {
+        std::filesystem::create_directories(targetDir / d, ec);
+    }
+
+    uint64_t copiedBytes    = 0;
+    size_t   completedFiles = 0;
+    for (const auto& item : files) {
+        setBackupProgress(true, "copying", completedFiles, files.size(), copiedBytes, totalBytes,
+                          grml::wideToUtf8(item.rel.wstring()));
+        const auto dst = targetDir / item.rel;
+        if (!dst.parent_path().empty()) {
+            std::filesystem::create_directories(dst.parent_path(), ec);
+        }
+        std::filesystem::copy_file(item.src, dst, std::filesystem::copy_options::overwrite_existing, ec);
+        if (ec) {
+            std::filesystem::remove_all(targetDir, ec);
+            return;
+        }
+        copiedBytes += item.size;
+        ++completedFiles;
+    }
+
+    setBackupProgress(true, "pruning", completedFiles, files.size(), copiedBytes, totalBytes, "");
+
+    const int maxBackups = (std::max)(1, cfg.getInt("general", "max_save_backups", 3));
+    std::vector<std::filesystem::path> backups;
+    for (const auto& ent : std::filesystem::directory_iterator(backupRoot, ec)) {
+        if (!ent.is_directory(ec)) continue;
+        const std::wstring name = ent.path().filename().wstring();
+        if (name.rfind(L"save_backup_", 0) == 0) {
+            backups.push_back(ent.path());
+        }
+    }
+    std::sort(backups.begin(), backups.end(), [](const auto& a, const auto& b) {
+        return a.filename().wstring() < b.filename().wstring();
+    });
+    while (backups.size() > static_cast<size_t>(maxBackups)) {
+        std::filesystem::remove_all(backups.front(), ec);
+        backups.erase(backups.begin());
+    }
+}
+
+} // namespace
+
+std::string buildBackupProgressJson()
+{
+    std::lock_guard lock(g_backupProgressMutex);
+    std::string out = "{";
+    out += "\"active\":" + std::string(g_backupProgress.active ? "true" : "false") + ",";
+    out += "\"phase\":\"" + ::jsonEsc(g_backupProgress.phase) + "\",";
+    out += "\"completedFiles\":" + std::to_string(g_backupProgress.completedFiles) + ",";
+    out += "\"totalFiles\":" + std::to_string(g_backupProgress.totalFiles) + ",";
+    out += "\"copiedBytes\":" + std::to_string(g_backupProgress.copiedBytes) + ",";
+    out += "\"totalBytes\":" + std::to_string(g_backupProgress.totalBytes) + ",";
+    out += "\"currentItem\":\"" + ::jsonEsc(g_backupProgress.currentItem) + "\"";
+    out += "}\n";
+    return out;
+}
+
 LaunchResult launchGame(const std::filesystem::path& loaderDir,
                         const std::filesystem::path& gameOverride,
                         const std::vector<std::string>& tempDisabledIds)
@@ -1282,6 +1487,8 @@ LaunchResult launchGame(const std::filesystem::path& loaderDir,
     const std::filesystem::path cfgGame =
         !gameOverride.empty() ? gameOverride : std::filesystem::path(grml::utf8ToWide(cfg.getString("general", "game_path", "")));
     const std::filesystem::path gameExe = grml::discoverWrsrGameExe(loaderDir, cfgGame);
+
+    backupSavesBeforeLaunch(loaderDir, dataDir, gameExe, cfg);
 
     const auto res = grml::launcher::launchAndInjectWrsr(loaderDir, gameExe, tempDisabledIds);
     LaunchResult lr;

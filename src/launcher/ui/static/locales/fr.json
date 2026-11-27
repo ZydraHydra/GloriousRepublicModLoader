@@ -334,6 +334,22 @@
 		"sectionLauncher": "Launcher & Updates",
 		"sectionGameDiscovery": "Game & Mod Discovery",
 		"sectionInGame": "In-Game Overlay & Startup",
-		"sectionDeveloper": "Offsets & Developer Tools"
+		"sectionDeveloper": "Offsets & Developer Tools",
+		"sectionSaveBackups": "Automatic Save Backups",
+		"autoBackupLabel": "Backup Saves Before Launch",
+		"autoBackupTip": "Automatically copies your entire <code>media_soviet\\save</code> folder into a timestamped backup folder before launching WRSR (<code>auto_backup_saves</code> in <code>grml.ini</code>).",
+		"maxBackupsLabel": "Maximum Backups to Keep",
+		"maxBackupsTip": "Oldest <code>save_backup_*</code> folders are automatically removed once this limit is exceeded (<code>max_save_backups</code> in <code>grml.ini</code>, default <code>3</code>).",
+		"backupPathLabel": "Save Backup Folder",
+		"backupPathTip": "Destination folder for timestamped savegame backups (<code>save_backup_path</code> in <code>grml.ini</code>). Leave empty to use <code>%LOCALAPPDATA%\\GRML\\save_backups</code>.",
+		"backupPathPlaceholder": "%LOCALAPPDATA%\\\\GRML\\\\save_backups (default)"
+	},
+	"backupModal": {
+		"title": "Backing Up Savegames",
+		"scanning": "Scanning savegame folder...",
+		"copying": "Copying savegame files before launch...",
+		"pruning": "Removing old backups over retention limit...",
+		"preparing": "Launching WRSR...",
+		"filesProgress": "{done} / {total} files"
 	}
 }

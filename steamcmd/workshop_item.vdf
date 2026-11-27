@@ -38,7 +38,7 @@ All your settings, playlists, mod `.ini` configs, and logs are stored safely in 
 [*] [b]Visual Mod Settings (Launcher + In-Game F9):[/b] Sliders, toggles, dropdowns, and tooltips in both the launcher and the matching [b]F9[/b] in-game overlay.
 [*] [b]Non-Destructive Asset Overrides (Media VFS):[/b] Layer `media_soviet\` / `override\` folders or `.zip` packs with priority ordering and conflict inspection without touching original game files.
 [*] [b]Direct-to-Save Launch & Intro Skip:[/b] Boot straight into your latest or chosen save with anti-crash-loop protection, and skip the 9.5s intro logo timer while indexing runs in the background.
-[*] [b]Save Inspector & CrashGuard:[/b] Inspect save dates, map templates, and missing Workshop IDs (with one-click copy & Steam links), plus live `grml.log` diagnostics and Windows crash attribution.
+[*] [b]Save Inspector, Auto-Backups & CrashGuard:[/b] Automatically backs up your saves per WRSR version before launch, inspects missing Workshop IDs (with one-click copy & Steam links), and provides live `grml.log` diagnostics with Windows crash attribution.
 [*] [b]Offsets & Pre-Flight Compatibility:[/b] Live `OK` / `CACHED` / `MISSING` signature status across 6 categories, pre-flight mod compatibility checks, and one-click OTA offset updates from GitHub.
 [/list]{CHANGELOG_SECTION}"
     "language"        "english"

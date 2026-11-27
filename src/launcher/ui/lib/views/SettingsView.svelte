@@ -142,6 +142,21 @@
 		await onDevPathsChange();
 	}
 
+	async function browseBackupFolder() {
+		const resp = await fetch(`/api/browse-folder?current=${encodeURIComponent(app.saveBackupPath.trim())}`);
+		const data = await resp.json();
+		if (data.ok && data.path) {
+			app.saveBackupPath = data.path;
+			await app.saveGrmlIni();
+		}
+	}
+
+	async function onMaxBackupsChange() {
+		const n = Math.round(Number(app.maxSaveBackups) || 3);
+		app.maxSaveBackups = Math.max(1, Math.min(50, n));
+		await app.saveGrmlIni();
+	}
+
 	async function browseDevFolder(field: 'save' | 'workshop' | 'wip' | 'overrides') {
 		const current =
 			field === 'save'
@@ -319,6 +334,55 @@
 			</div>
 		</PanelCard>
 
+		<SectionHeader title={t('settings.sectionSaveBackups')} />
+
+		<PanelCard>
+			<div class="control-top">
+				<div class="control-label">{t('settings.autoBackupLabel')}</div>
+				<ToggleSwitch bind:checked={app.chkAutoBackupSaves} onchange={() => app.saveGrmlIni()} />
+			</div>
+			<div class="control-tip">
+				{@html t('settings.autoBackupTip')}
+			</div>
+		</PanelCard>
+
+		<PanelCard>
+			<div class="control-top">
+				<div class="control-label">{t('settings.maxBackupsLabel')}</div>
+				<input
+					type="number"
+					min="1"
+					max="50"
+					class="backup-count-input"
+					bind:value={app.maxSaveBackups}
+					disabled={!app.chkAutoBackupSaves}
+					onchange={onMaxBackupsChange}
+				/>
+			</div>
+			<div class="control-tip">
+				{@html t('settings.maxBackupsTip')}
+			</div>
+		</PanelCard>
+
+		<PanelCard>
+			<div class="control-top">
+				<div class="control-label">{t('settings.backupPathLabel')}</div>
+			</div>
+			<div class="control-tip">
+				{@html t('settings.backupPathTip')}
+			</div>
+			<div class="control-input-row">
+				<TextInput
+					bind:value={app.saveBackupPath}
+					mono={true}
+					disabled={!app.chkAutoBackupSaves}
+					placeholder={t('settings.backupPathPlaceholder')}
+					onchange={() => app.saveGrmlIni()}
+				/>
+				<Button disabled={!app.chkAutoBackupSaves} onclick={browseBackupFolder}>{t('settings.browseBtn')}</Button>
+			</div>
+		</PanelCard>
+
 		<SectionHeader title={t('settings.sectionDeveloper')} />
 
 		<PanelCard>
@@ -461,5 +525,19 @@
 	}
 	.dev-path-inactive {
 		opacity: 0.6;
+	}
+	.backup-count-input {
+		width: 78px;
+		padding: 5px 8px;
+		border-radius: 6px;
+		border: 1px solid rgba(255, 255, 255, 0.14);
+		background: rgba(15, 16, 18, 0.85);
+		color: inherit;
+		font-family: inherit;
+		font-size: 13px;
+		text-align: center;
+	}
+	.backup-count-input:disabled {
+		opacity: 0.5;
 	}
 </style>

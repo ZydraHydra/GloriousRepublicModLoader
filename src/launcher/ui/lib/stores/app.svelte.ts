@@ -196,6 +196,16 @@ export interface SavesResponse {
 	saves: SaveEntry[];
 }
 
+export interface BackupProgress {
+	active: boolean;
+	phase: 'idle' | 'scanning' | 'copying' | 'pruning' | 'done';
+	completedFiles: number;
+	totalFiles: number;
+	copiedBytes: number;
+	totalBytes: number;
+	currentItem: string;
+}
+
 export interface UpdateCheckInfo {
 	ok: boolean;
 	currentVersion: string;
@@ -232,6 +242,9 @@ class AppStore {
 	chkMenuStatus = $state(true);
 	chkSkipIntro = $state(true);
 	chkVfsEnabled = $state(true);
+	chkAutoBackupSaves = $state(true);
+	maxSaveBackups = $state(3);
+	saveBackupPath = $state('');
 	overlayHotkey = $state('F9');
 	chkDevMode = $state(false);
 	chkDevSave = $state(false);
@@ -255,6 +268,7 @@ class AppStore {
 	crashBannerVisible = $state(false);
 	launchWatchUntil = $state(0);
 	launching = $state(false);
+	backupProgress = $state<BackupProgress | null>(null);
 
 	// Update check state
 	updateInfo = $state<UpdateCheckInfo | null>(null);
@@ -312,6 +326,10 @@ class AppStore {
 		this.chkWorkshop = gen.scan_workshop !== '0';
 		this.chkWip = gen.scan_workshop_wip !== '0';
 		this.chkVfsEnabled = this.vfs.enabled !== false;
+		this.chkAutoBackupSaves = gen.auto_backup_saves !== '0';
+		const parsedMaxBackups = Number.parseInt(gen.max_save_backups ?? '3', 10);
+		this.maxSaveBackups = Number.isFinite(parsedMaxBackups) && parsedMaxBackups >= 1 ? parsedMaxBackups : 3;
+		this.saveBackupPath = gen.save_backup_path ?? '';
 		this.overlayHotkey = (gen.overlay_hotkey || 'F9').trim() || 'F9';
 		this.chkDevMode = gen.dev_mode === '1';
 		this.chkDevSave = gen.dev_save_enabled === '1';
@@ -370,6 +388,9 @@ class AppStore {
 			game_path: this.gameExeInput.trim(),
 			show_menu_status: this.chkMenuStatus ? '1' : '0',
 			skip_intro_logos: this.chkSkipIntro ? '1' : '0',
+			auto_backup_saves: this.chkAutoBackupSaves ? '1' : '0',
+			max_save_backups: String(Math.max(1, Math.min(50, Math.round(Number(this.maxSaveBackups) || 3)))),
+			save_backup_path: this.saveBackupPath.trim(),
 			scan_workshop: this.chkWorkshop ? '1' : '0',
 			scan_workshop_wip: this.chkWip ? '1' : '0',
 			overlay_hotkey: this.overlayHotkey || 'F9',
@@ -539,39 +560,69 @@ class AppStore {
 	}
 
 	async launchWrsr(autoLoadSave?: string | null, tempDisabledIds?: string[]) {
-		await runGuardedLaunch({
-			isLocked: () => this.launchLocked,
-			setLaunching: (v) => {
-				this.launching = v;
-			},
-			saveIni: () => this.saveGrmlIni(),
-			setStatus: (msg) => this.setStatus(msg),
-			fetchFn: fetch,
-			gameExe: this.gameExeInput,
-			autoLoadSave: autoLoadSave || undefined,
-			tempDisabledIds,
-			launchingStatus: autoLoadSave
-				? t('status.launchingIntoSave', { save: autoLoadSave })
-				: t('status.launching'),
-			launchedStatus: t('status.launched'),
-			launchFailedStatus: t('status.launchFailed'),
-			onLaunchSuccess: async () => {
-				this.launchWatchUntil = Date.now() + 30000;
-				this.diagData = {
-					...(this.diagData ?? {
-						running: true,
-						pids: [],
-						lastLaunchPid: null,
-						exitedUnexpectedly: false,
-						logTail: [],
-						suspects: [],
-						checkedAt: ''
-					}),
-					running: true
-				};
-				await this.pollDiagnostics(false, true);
-			}
-		});
+		let pollTimer: ReturnType<typeof setInterval> | null = null;
+		if (this.chkAutoBackupSaves && !this.launchLocked) {
+			this.backupProgress = {
+				active: true,
+				phase: 'scanning',
+				completedFiles: 0,
+				totalFiles: 0,
+				copiedBytes: 0,
+				totalBytes: 0,
+				currentItem: ''
+			};
+			pollTimer = setInterval(async () => {
+				try {
+					const r = await fetch('/api/backup-progress');
+					if (r.ok) {
+						const p = (await r.json()) as BackupProgress;
+						if (p.active || p.phase === 'done') {
+							this.backupProgress = p;
+						}
+					}
+				} catch {
+					// ignore transient poll error
+				}
+			}, 120);
+		}
+		try {
+			await runGuardedLaunch({
+				isLocked: () => this.launchLocked,
+				setLaunching: (v) => {
+					this.launching = v;
+				},
+				saveIni: () => this.saveGrmlIni(),
+				setStatus: (msg) => this.setStatus(msg),
+				fetchFn: fetch,
+				gameExe: this.gameExeInput,
+				autoLoadSave: autoLoadSave || undefined,
+				tempDisabledIds,
+				launchingStatus: autoLoadSave
+					? t('status.launchingIntoSave', { save: autoLoadSave })
+					: t('status.launching'),
+				launchedStatus: t('status.launched'),
+				launchFailedStatus: t('status.launchFailed'),
+				onLaunchSuccess: async () => {
+					this.launchWatchUntil = Date.now() + 30000;
+					this.diagData = {
+						...(this.diagData ?? {
+							running: true,
+							pids: [],
+							lastLaunchPid: null,
+							exitedUnexpectedly: false,
+							logTail: [],
+							suspects: [],
+							checkedAt: ''
+						}),
+						running: true
+					};
+					await this.pollDiagnostics(false, true);
+				}
+			});
+		} finally {
+			if (pollTimer) clearInterval(pollTimer);
+			this.backupProgress = null;
+		}
 	}
 }
 

@@ -40,7 +40,8 @@ GRML lets you manage Steam Workshop (`784150`) and local DLL mods, tweak mod `.i
   - Click **▶ Continue `<SaveName>`** in the top bar (automatically updated every 5s via `/api/latest-save` from `header.bin` timestamps and `grml_session.json`) or **Launch Save** inside the **Save Inspector** to boot straight into any save.
   - Protected by a one-shot anti-crash-loop guard (`auto_load_save` is cleared in `grml_session.json` before deserialization begins).
   - Automatically skips the 9.5s intro logo timer (`devlogo.dds` / `publogo.dds`) while Workshop & asset indexing runs in the background (toggleable via `skip_intro_logos = 1` in `grml.ini`).
-- **Save Inspector & Post-Crash Recovery:**
+- **Save Inspector, Auto-Backups & Post-Crash Recovery:**
+  - Automatically backs up `media_soviet\save\` before each launch into per-game-version timestamped folders (`<backupRoot>\<gameVersion>\save_backup_YYYY-MM-DD_HH-MM-SS\`) with a live progress modal and configurable retention limit (default: 3 backups per game version).
   - Scan `media_soviet\save\` on demand (sorted newest-first) to see each save's date, size, map template, and referenced Workshop items.
   - Immediately spot **missing Workshop IDs** with **Copy Missing IDs** and direct Steam Client / Web links to resubscribe.
   - If `SOVIET64.exe` crashes after loading a save, GRML alerts you with a one-click **Inspect Save** banner.
@@ -66,6 +67,7 @@ All user files live in `%LOCALAPPDATA%\GRML`:
 - `grml_vfs.ini` — Asset Override pack order and toggles
 - `configs/<plugin_id>.ini` — update-safe per-mod `.ini` settings for GRML SDK v2 mods
 - `grml_playlists.json` — saved mod playlists
+- `save_backups/<gameVersion>/` — automatic pre-launch savegame backups (configurable in **Settings**)
 - `grml.log` & `grml_session.json` — runtime log and last-loaded-save crash breadcrumb
 
 ---
