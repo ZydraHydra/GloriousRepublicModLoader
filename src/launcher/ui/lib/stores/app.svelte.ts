@@ -1,3 +1,6 @@
+import { i18n, t } from '$lib/i18n/index.svelte';
+import { isLaunchLocked, runGuardedLaunch, shouldPollProcess } from './launchGuard';
+
 export type ViewId =
 	| 'playlists'
 	| 'mods'
@@ -77,8 +80,12 @@ export interface VfsState {
 
 export interface PlaylistEntry {
 	name: string;
-	createdAt: string;
+	createdAt?: string;
 	enabledIds: string[];
+	workshopIds?: string[];
+	source?: string;
+	collectionId?: string;
+	collectionUrl?: string;
 }
 
 export interface OffsetDiagnosticEntry {
@@ -109,6 +116,7 @@ export interface DiscoveryData {
 	dataDir?: string;
 	gameExe: string;
 	gameVersion: string;
+	gameLanguage?: string;
 	peFileVersion?: string;
 	gameSha256: string;
 	peTimestamp: string;
@@ -187,7 +195,7 @@ export interface UpdateCheckInfo {
 
 class AppStore {
 	activeView = $state<ViewId>('mods');
-	statusToast = $state('Ready.');
+	statusToast = $state('');
 	discovery = $state<DiscoveryData | null>(null);
 	grmlIni = $state<Record<string, Record<string, string>>>({});
 	vfs = $state<VfsState>({
@@ -221,6 +229,7 @@ class AppStore {
 	lastCrashSaveName = $state('');
 	crashBannerVisible = $state(false);
 	launchWatchUntil = $state(0);
+	launching = $state(false);
 
 	// Update check state
 	updateInfo = $state<UpdateCheckInfo | null>(null);
@@ -230,7 +239,12 @@ class AppStore {
 
 	private diagPollInFlight = false;
 	private diagTimer: ReturnType<typeof setInterval> | null = null;
+	private getDiagAutoRefresh: () => boolean = () => false;
 	private latestSavePollInFlight = false;
+
+	get launchLocked(): boolean {
+		return isLaunchLocked(this.launching, this.diagData?.running);
+	}
 
 	setStatus(msg: string) {
 		this.statusToast = msg;
@@ -246,7 +260,7 @@ class AppStore {
 	}
 
 	async fetchState() {
-		this.setStatus('Discovering mods & WRSR binary...');
+		this.setStatus(t('status.discovering'));
 		const qs = this.gameExeInput.trim()
 			? `?game=${encodeURIComponent(this.gameExeInput.trim())}`
 			: '';
@@ -267,13 +281,14 @@ class AppStore {
 			this.gameExeInput = data.discovery.gameExe;
 		}
 		const gen = this.grmlIni.general ?? {};
+		await i18n.init(gen.language, data.discovery?.gameLanguage ?? '');
 		this.chkMenuStatus = gen.show_menu_status !== '0';
 		this.chkWorkshop = gen.scan_workshop !== '0';
 		this.chkWip = gen.scan_workshop_wip !== '0';
 		this.chkVfsEnabled = this.vfs.enabled !== false;
 		this.overlayHotkey = (gen.overlay_hotkey || 'F9').trim() || 'F9';
 
-		this.setStatus(`Loaded ${data.discovery?.mods?.length ?? 0} mod(s).`);
+		this.setStatus(t('status.loadedMods', { count: data.discovery?.mods?.length ?? 0 }));
 	}
 
 	async refreshLatestSave() {
@@ -308,7 +323,8 @@ class AppStore {
 			show_menu_status: this.chkMenuStatus ? '1' : '0',
 			scan_workshop: this.chkWorkshop ? '1' : '0',
 			scan_workshop_wip: this.chkWip ? '1' : '0',
-			overlay_hotkey: this.overlayHotkey || 'F9'
+			overlay_hotkey: this.overlayHotkey || 'F9',
+			language: i18n.setting || 'auto'
 		};
 		const resp = await fetch('/api/config', {
 			method: 'POST',
@@ -316,7 +332,7 @@ class AppStore {
 			body: JSON.stringify({ general, plugins })
 		});
 		if ((await resp.json()).ok) {
-			this.setStatus('Saved grml.ini.');
+			this.setStatus(t('status.savedGrmlIni'));
 		}
 	}
 
@@ -336,14 +352,14 @@ class AppStore {
 			})
 		});
 		if ((await resp.json()).ok) {
-			this.setStatus('Saved Asset Overrides (grml_vfs.ini).');
+			this.setStatus(t('status.savedVfsIni'));
 			await this.fetchState();
 		}
 	}
 
 	async fetchSaves(preselectName: string | null = null) {
 		this.savesLoading = true;
-		this.setStatus('Scanning WRSR saves...');
+		this.setStatus(t('status.scanningSaves'));
 		try {
 			const qs = this.gameExeInput.trim()
 				? `?game=${encodeURIComponent(this.gameExeInput.trim())}`
@@ -366,7 +382,7 @@ class AppStore {
 			if (!this.selectedSaveName && (data.saves || []).length > 0) {
 				this.selectedSaveName = data.saves[0].name;
 			}
-			this.setStatus(`Scanned ${(data.saves || []).length} save(s).`);
+			this.setStatus(t('status.scannedSaves', { count: (data.saves || []).length }));
 		} finally {
 			this.savesLoading = false;
 		}
@@ -402,13 +418,13 @@ class AppStore {
 		}
 	}
 
-	startDiagnosticsPolling(getAutoRefresh: () => boolean) {
+	startDiagnosticsPolling(getAutoRefresh?: () => boolean) {
+		if (getAutoRefresh) this.getDiagAutoRefresh = getAutoRefresh;
 		if (this.diagTimer) return;
 		this.diagTimer = setInterval(() => {
-			const watching = Date.now() < this.launchWatchUntil;
-			if (watching) {
+			if (shouldPollProcess(this.launchWatchUntil, this.diagData?.running)) {
 				this.pollDiagnostics(false, true);
-			} else if (this.activeView === 'diagnostics' && getAutoRefresh()) {
+			} else if (this.activeView === 'diagnostics' && this.getDiagAutoRefresh()) {
 				this.pollDiagnostics(false, false);
 			}
 		}, 5000);
@@ -417,7 +433,7 @@ class AppStore {
 	async checkForUpdates(manual = false) {
 		if (this.checkingUpdate) return;
 		this.checkingUpdate = true;
-		if (manual) this.setStatus('Checking GitHub for updates...');
+		if (manual) this.setStatus(t('status.checkingUpdates'));
 		try {
 			const resp = await fetch('/api/check-update');
 			const data = (await resp.json()) as UpdateCheckInfo;
@@ -426,13 +442,13 @@ class AppStore {
 				if (!data.ok) {
 					this.setStatus(`Update check failed: ${data.error || 'Offline'}`);
 				} else if (data.updateAvailable) {
-					this.setStatus(`Update available: v${data.latestVersion}`);
+					this.setStatus(t('status.updateAvailable', { version: data.latestVersion ?? '' }));
 				} else {
-					this.setStatus(`GRML v${data.currentVersion} is up to date.`);
+					this.setStatus(t('status.upToDate', { version: data.currentVersion }));
 				}
 			}
 		} catch {
-			if (manual) this.setStatus('Update check failed (offline).');
+			if (manual) this.setStatus(t('status.updateCheckOffline'));
 		} finally {
 			this.checkingUpdate = false;
 		}
@@ -441,7 +457,7 @@ class AppStore {
 	async updateOffsetsOta() {
 		if (this.updatingOffsets) return;
 		this.updatingOffsets = true;
-		this.setStatus('Fetching latest grml_offsets.ini from GitHub...');
+		this.setStatus(t('status.fetchingOffsets'));
 		try {
 			const resp = await fetch('/api/update-offsets', { method: 'POST' });
 			const data = (await resp.json()) as OffsetsOtaResult;
@@ -452,39 +468,51 @@ class AppStore {
 			}
 			await this.fetchState();
 			if (data.updated) {
-				this.setStatus(`Updated grml_offsets.ini (${data.entryCount ?? 0} entries, hash ${data.hash}).`);
+				this.setStatus(t('status.offsetsUpdated', { count: data.entryCount ?? 0, hash: data.hash ?? '' }));
 			} else {
-				this.setStatus(`grml_offsets.ini is already up to date (${data.hash}).`);
+				this.setStatus(t('status.offsetsAlreadyUpToDate', { hash: data.hash ?? '' }));
 			}
 		} catch {
 			this.offsetsOtaResult = { ok: false, error: 'Network error' };
-			this.setStatus('Offsets OTA update failed (offline).');
+			this.setStatus(t('status.offsetsOtaOffline'));
 		} finally {
 			this.updatingOffsets = false;
 		}
 	}
 
 	async launchWrsr(autoLoadSave?: string) {
-		await this.saveGrmlIni();
-		this.setStatus(
-			autoLoadSave
-				? `Launching SOVIET64.exe directly into '${autoLoadSave}'...`
-				: 'Launching SOVIET64.exe and injecting GRML...'
-		);
-		const resp = await fetch('/api/launch', {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({
-				gameExe: this.gameExeInput.trim(),
-				autoLoadSave: autoLoadSave || ''
-			})
+		await runGuardedLaunch({
+			isLocked: () => this.launchLocked,
+			setLaunching: (v) => {
+				this.launching = v;
+			},
+			saveIni: () => this.saveGrmlIni(),
+			setStatus: (msg) => this.setStatus(msg),
+			fetchFn: fetch,
+			gameExe: this.gameExeInput,
+			autoLoadSave,
+			launchingStatus: autoLoadSave
+				? t('status.launchingIntoSave', { save: autoLoadSave })
+				: t('status.launching'),
+			launchedStatus: t('status.launched'),
+			launchFailedStatus: t('status.launchFailed'),
+			onLaunchSuccess: async () => {
+				this.launchWatchUntil = Date.now() + 30000;
+				this.diagData = {
+					...(this.diagData ?? {
+						running: true,
+						pids: [],
+						lastLaunchPid: null,
+						exitedUnexpectedly: false,
+						logTail: [],
+						suspects: [],
+						checkedAt: ''
+					}),
+					running: true
+				};
+				await this.pollDiagnostics(false, true);
+			}
 		});
-		const data = await resp.json();
-		this.setStatus(data.message || (data.ok ? 'Launched!' : 'Launch failed'));
-		if (data.ok) {
-			this.launchWatchUntil = Date.now() + 30000;
-			this.pollDiagnostics(false, true);
-		}
 	}
 }
 

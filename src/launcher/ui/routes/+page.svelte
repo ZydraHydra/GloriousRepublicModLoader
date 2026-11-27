@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { app } from '$lib/stores/app.svelte';
+	import { i18n, t } from '$lib/i18n/index.svelte';
 	import { openExternalUrl } from '$lib/utils';
 	import { Button } from '$lib/components/ui';
 	import PlaylistsView from '$lib/views/PlaylistsView.svelte';
@@ -17,8 +18,8 @@
 	const totalCount = $derived((app.discovery?.mods || []).length);
 	const verLabel = $derived(
 		app.discovery && app.discovery.gameVersion !== 'unknown'
-			? `WRSR ${app.discovery.gameVersion}`
-			: 'WRSR: detecting...'
+			? t('header.wrsrVersion', { version: app.discovery.gameVersion })
+			: t('header.wrsrDetecting')
 	);
 
 	let playingInternationale = $state(false);
@@ -40,8 +41,13 @@
 	}
 
 	onMount(() => {
+		i18n.init().then(() => {
+			if (!app.statusToast) app.setStatus(t('common.ready'));
+		});
 		app.fetchState().then(() => {
 			app.checkForUpdates(false);
+			app.pollDiagnostics(false, true);
+			app.startDiagnosticsPolling();
 		});
 		const latestSaveTimer = setInterval(() => {
 			app.refreshLatestSave();
@@ -68,7 +74,7 @@
 				type="button"
 				class="logo-flip-btn"
 				class:flipped={playingInternationale}
-				title={playingInternationale ? 'Stop The Internationale' : 'GLORIOUS REPUBLIC MOD LOADER'}
+				title={playingInternationale ? t('header.stopInternationale') : t('header.title')}
 				onclick={toggleInternationale}
 			>
 				<span class="logo-flip-inner">
@@ -105,7 +111,7 @@
 				</span>
 			</button>
 			<div class="brand-text">
-				<div class="brand-title">GLORIOUS REPUBLIC MOD LOADER</div>
+				<div class="brand-title">{t('header.title')}</div>
 			</div>
 		</div>
 
@@ -113,31 +119,32 @@
 			{#if app.updateInfo?.updateAvailable && app.updateInfo.releaseUrl}
 				<Button
 					size="sm"
-					title={`New GRML release v${app.updateInfo.latestVersion} available on GitHub`}
+					title={t('header.updateAvailableTitle', { version: app.updateInfo.latestVersion ?? '' })}
 					onclick={() => openExternalUrl(app.updateInfo!.releaseUrl!)}
 				>
-					Update v{app.updateInfo.latestVersion} ↗
+					{t('header.updateAvailableBadge', { version: app.updateInfo.latestVersion ?? '' })}
 				</Button>
 			{/if}
-			<span class="pill" title={app.discovery?.gameExe || 'Game executable not detected'}>{verLabel}</span>
+			<span class="pill" title={app.discovery?.gameExe || t('header.gameExeNotDetected')}>{verLabel}</span>
 			{#if app.latestSave}
 				<Button
+					disabled={app.launchLocked}
 					onclick={() => app.launchWrsr(app.latestSave)}
-					title={`Launch WRSR directly into save '${app.latestSave}'`}
+					title={t('header.continueSaveTitle', { save: app.latestSave })}
 				>
-					▶ Continue {app.latestSave}
+					{t('header.continueSave', { save: app.latestSave })}
 				</Button>
 			{/if}
-			<Button variant="primary" onclick={() => app.launchWrsr()}>▶ Launch WRSR</Button>
+			<Button variant="primary" disabled={app.launchLocked} onclick={() => app.launchWrsr()}>{t('header.launchWrsr')}</Button>
 		</div>
 	</header>
 
 	{#if app.crashBannerVisible && app.lastCrashSaveName}
 		<div class="post-crash-banner">
-			<span>SOVIET64.exe crashed after loading '{app.lastCrashSaveName}'.</span>
+			<span>{t('header.crashBannerText', { save: app.lastCrashSaveName })}</span>
 			<div class="post-crash-actions">
-				<Button variant="primary" size="sm" onclick={inspectCrashSave}>Inspect Save</Button>
-				<Button size="sm" onclick={() => (app.crashBannerVisible = false)}>Dismiss</Button>
+				<Button variant="primary" size="sm" onclick={inspectCrashSave}>{t('header.inspectSave')}</Button>
+				<Button size="sm" onclick={() => (app.crashBannerVisible = false)}>{t('common.dismiss')}</Button>
 			</div>
 		</div>
 	{/if}
@@ -149,14 +156,14 @@
 				class:active={app.activeView === 'playlists'}
 				onclick={() => app.switchView('playlists')}
 			>
-				Playlists
+				{t('nav.playlists')}
 			</button>
 			<button
 				class="nav-btn"
 				class:active={app.activeView === 'mods'}
 				onclick={() => app.switchView('mods')}
 			>
-				<span>Mods &amp; Load Order</span>
+				<span>{t('nav.mods')}</span>
 				<span class="count-pill">{enabledCount}/{totalCount}</span>
 			</button>
 			<button
@@ -164,28 +171,28 @@
 				class:active={app.activeView === 'overrides'}
 				onclick={() => app.switchView('overrides')}
 			>
-				Asset Overrides
+				{t('nav.overrides')}
 			</button>
 			<button
 				class="nav-btn"
 				class:active={app.activeView === 'saves'}
 				onclick={() => app.switchView('saves')}
 			>
-				Save Inspector
+				{t('nav.saves')}
 			</button>
 			<button
 				class="nav-btn"
 				class:active={app.activeView === 'diagnostics'}
 				onclick={() => app.switchView('diagnostics')}
 			>
-				Diagnostics &amp; Logs
+				{t('nav.diagnostics')}
 			</button>
 			<button
 				class="nav-btn"
 				class:active={app.activeView === 'schema-help'}
 				onclick={() => app.switchView('schema-help')}
 			>
-				External Mod UI Guide
+				{t('nav.schemaHelp')}
 			</button>
 
 			<div class="sidebar-footer">
@@ -194,9 +201,9 @@
 					class:active={app.activeView === 'settings'}
 					onclick={() => app.switchView('settings')}
 				>
-					Settings
+					{t('nav.settings')}
 				</button>
-				<div class="status-box">{app.statusToast}</div>
+				<div class="status-box">{app.statusToast || t('common.ready')}</div>
 			</div>
 		</aside>
 

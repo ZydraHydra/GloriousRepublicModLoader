@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { app } from '$lib/stores/app.svelte';
+	import { t } from '$lib/i18n/index.svelte';
 	import { openExternalUrl } from '$lib/utils';
 	import {
 		Badge,
@@ -38,28 +39,28 @@
 
 	async function copyMissing(ids: string[]) {
 		await navigator.clipboard.writeText(ids.join('\n'));
-		app.setStatus(`Copied ${ids.length} missing Workshop ID(s) to clipboard.`);
+		app.setStatus(t('saves.copiedMissingStatus', { count: ids.length }));
 	}
 </script>
 
 <SplitLayout>
 	{#snippet toolbar()}
-		<TextInput bind:value={searchQuery} placeholder="Search saves by name..." />
-		<ToggleSwitch bind:checked={missingOnly} label="Missing Mods Only" />
-		<Button size="sm" onclick={() => app.fetchSaves(app.selectedSaveName)}>↻ Refresh Saves</Button>
+		<TextInput bind:value={searchQuery} placeholder={t('saves.searchPlaceholder')} />
+		<ToggleSwitch bind:checked={missingOnly} label={t('saves.missingOnly')} />
+		<Button size="sm" onclick={() => app.fetchSaves(app.selectedSaveName)}>{t('saves.refreshBtn')}</Button>
 	{/snippet}
 
 	{#snippet list()}
 		{#if app.savesLoading}
-			<EmptyState message="Scanning saves & Workshop items..." />
+			<EmptyState message={t('saves.scanning')} />
 		{:else if !app.savesData}
 			<EmptyState>
-				Open this tab or click <strong>↻ Refresh Saves</strong> to scan <code>media_soviet\save</code>.
+				{@html t('saves.emptyPrompt')}
 			</EmptyState>
 		{:else if !app.savesData.ok}
-			<EmptyState message={app.savesData.error || 'Failed to scan saves.'} />
+			<EmptyState message={app.savesData.error || t('saves.scanFailed')} />
 		{:else if filteredSaves.length === 0}
-			<EmptyState message="No matching saves found." />
+			<EmptyState message={t('saves.noMatching')} />
 		{:else}
 			{#each filteredSaves as save (save.name)}
 				{@const missingCount = (save.missingWorkshopIds || []).length}
@@ -74,7 +75,7 @@
 					<div class="save-row-main">
 						<div class="mod-title">{save.name}</div>
 						<div class="mod-sub">
-							{save.lastModifiedDisplay || 'Unknown time'} · {(save.referencedWorkshopIds || []).length} Workshop item(s)
+							{save.lastModifiedDisplay || t('saves.unknownTime')} · {t('saves.workshopItemsCount', { count: (save.referencedWorkshopIds || []).length })}
 						</div>
 					</div>
 					<Badge variant={missingCount > 0 || errCount > 0 ? 'warn' : 'ready'}>
@@ -87,7 +88,7 @@
 
 	{#snippet inspector()}
 		{#if !selectedSave}
-			<EmptyState message="Select a save to inspect referenced Workshop IDs and missing items." />
+			<EmptyState message={t('saves.emptySelection')} />
 		{:else}
 			{@const refs = selectedSave.referencedWorkshopIds || []}
 			{@const missing = selectedSave.missingWorkshopIds || []}
@@ -100,7 +101,7 @@
 				: '—'}
 			{@const inGameDate =
 				selectedSave.inGameYear && selectedSave.inGameYear > 0
-					? `${selectedSave.inGameYear} (Day ${selectedSave.inGameDay || 0})`
+					? t('saves.inGameDateValue', { year: selectedSave.inGameYear, day: selectedSave.inGameDay || 0 })
 					: ''}
 
 			<div class="insp-header">
@@ -112,34 +113,35 @@
 					<Button
 						variant="primary"
 						size="sm"
+						disabled={app.launchLocked}
 						onclick={() => app.launchWrsr(selectedSave.name)}
-						title={`Launch WRSR directly into '${selectedSave.name}'`}
+						title={t('saves.launchSaveTip', { save: selectedSave.name })}
 					>
-						▶ Launch Save
+						{t('saves.launchSaveBtn')}
 					</Button>
 				</div>
 				<div class="insp-subline">
-					<span>Folder: {selectedSave.name}</span>
+					<span>{t('saves.folderLabel', { name: selectedSave.name })}</span>
 					<span>·</span>
-					<span>Last Played: {selectedSave.lastModifiedDisplay || 'Unknown'}</span>
-					<span class="insp-link-chip" title={selectedSave.path || ''}>Path</span>
+					<span>{t('saves.lastPlayedLabel', { time: selectedSave.lastModifiedDisplay || t('common.unknown') })}</span>
+					<span class="insp-link-chip" title={selectedSave.path || ''}>{t('saves.pathChip')}</span>
 				</div>
 			</div>
 
 			{#if errors.length > 0}
 				<div style="margin-bottom:12px;">
 					<PanelCard tone="danger">
-						<div class="control-label" style="color:var(--danger);">Save Integrity Issues</div>
+						<div class="control-label" style="color:var(--danger);">{t('saves.integrityIssues')}</div>
 						<div class="insp-meta" style="color:var(--text);">{errors.join(' · ')}</div>
 					</PanelCard>
 				</div>
 			{/if}
 
 			{#if missing.length > 0}
-				<SectionHeader title={`Missing Workshop Items (${missing.length})`} tone="danger">
+				<SectionHeader title={t('saves.missingItemsHeader', { count: missing.length })} tone="danger">
 					{#snippet actions()}
 						<Button variant="primary" size="sm" onclick={() => copyMissing(missing)}>
-							Copy Missing IDs
+							{t('saves.copyMissingIds')}
 						</Button>
 					{/snippet}
 				</SectionHeader>
@@ -152,13 +154,13 @@
 									size="sm"
 									onclick={() => openExternalUrl(`steam://url/CommunityFilePage/${encodeURIComponent(id)}`)}
 								>
-									Steam Client ↗
+									{t('saves.steamClient')}
 								</Button>
 								<Button
 									size="sm"
 									onclick={() => openExternalUrl(`https://steamcommunity.com/sharedfiles/filedetails/?id=${encodeURIComponent(id)}`)}
 								>
-									Web Page ↗
+									{t('saves.webPage')}
 								</Button>
 							</div>
 						</div>
@@ -169,51 +171,51 @@
 			<div class="save-details-grid">
 				{#if inGameDate}
 					<div class="save-detail-card">
-						<div class="save-detail-label">In-Game Date</div>
+						<div class="save-detail-label">{t('saves.inGameDateLabel')}</div>
 						<div class="save-detail-val">{inGameDate}</div>
 					</div>
 				{/if}
 				<div class="save-detail-card">
-					<div class="save-detail-label">Workshop Mods</div>
-					<div class="save-detail-val">{installedCount} / {refs.length} installed</div>
+					<div class="save-detail-label">{t('saves.workshopModsLabel')}</div>
+					<div class="save-detail-val">{t('saves.installedOfTotal', { installed: installedCount, total: refs.length })}</div>
 				</div>
 				<div class="save-detail-card">
-					<div class="save-detail-label">Save Size</div>
-					<div class="save-detail-val">{sizeMb} ({selectedSave.fileCount || 0} files)</div>
+					<div class="save-detail-label">{t('saves.saveSizeLabel')}</div>
+					<div class="save-detail-val">{t('saves.saveSizeValue', { size: sizeMb, files: selectedSave.fileCount || 0 })}</div>
 				</div>
 				{#if selectedSave.worldSize}
 					<div class="save-detail-card">
-						<div class="save-detail-label">Map Size</div>
+						<div class="save-detail-label">{t('saves.mapSizeLabel')}</div>
 						<div class="save-detail-val">{selectedSave.worldSize}</div>
 					</div>
 				{/if}
 				{#if selectedSave.originalMapName}
 					<div class="save-detail-card">
-						<div class="save-detail-label">Map Template</div>
+						<div class="save-detail-label">{t('saves.mapTemplateLabel')}</div>
 						<div class="save-detail-val">{selectedSave.originalMapName}</div>
 					</div>
 				{/if}
 				{#if selectedSave.headerVersion}
 					<div class="save-detail-card">
-						<div class="save-detail-label">Header Format</div>
+						<div class="save-detail-label">{t('saves.headerFormatLabel')}</div>
 						<div class="save-detail-val">v{selectedSave.headerVersion}</div>
 					</div>
 				{/if}
 			</div>
 
-			<SectionHeader title={`Installed Workshop Items in Save (${installed.length})`} />
+			<SectionHeader title={t('saves.installedItemsHeader', { count: installed.length })} />
 			{#if installed.length === 0}
 				<div class="insp-meta">
 					{refs.length === 0
-						? "No Workshop items are referenced in this save's header.bin."
-						: 'None of the referenced Workshop items are currently installed.'}
+						? t('saves.noRefsInHeader')
+						: t('saves.noRefsInstalled')}
 				</div>
 			{:else}
 				<div class="schema-form" style="margin-top:8px;">
 					{#each installed as im (im.id)}
 						{@const knownName = modNameByWsId.get(String(im.id))}
-						{@const assetsText = (im.assets || []).length > 0 ? `Assets: ${im.assets.join(', ')}` : ''}
-						{@const metaParts = [im.itemType || 'Workshop Item', assetsText].filter(Boolean)}
+						{@const assetsText = (im.assets || []).length > 0 ? t('saves.assetsPrefix', { assets: im.assets.join(', ') }) : ''}
+						{@const metaParts = [im.itemType || t('saves.workshopItemFallback'), assetsText].filter(Boolean)}
 						<div class="missing-ws-row">
 							<div style="min-width:0;">
 								<div style="font-size:12px;font-weight:600;color:var(--text);">
@@ -227,13 +229,13 @@
 									size="sm"
 									onclick={() => openExternalUrl(`steam://url/CommunityFilePage/${encodeURIComponent(im.id)}`)}
 								>
-									Steam ↗
+									{t('saves.steamShort')}
 								</Button>
 								<Button
 									size="sm"
 									onclick={() => openExternalUrl(`https://steamcommunity.com/sharedfiles/filedetails/?id=${encodeURIComponent(im.id)}`)}
 								>
-									Web ↗
+									{t('saves.webShort')}
 								</Button>
 							</div>
 						</div>
