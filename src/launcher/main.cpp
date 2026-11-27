@@ -1314,7 +1314,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
     }
     SetConsoleOutputCP(CP_UTF8);
 
-    enum class Mode { Launch, Discover, InspectSaves, Status, CrashEvents, SaveVfs, SaveConfig, ReadIni, SaveIni, GenSchema };
+    enum class Mode { Launch, Discover, InspectSaves, Status, CrashEvents, SaveVfs, SaveConfig, ReadIni, SaveIni, GenSchema, ServeOnly };
     Mode mode = Mode::Launch;
     std::filesystem::path gameOverride;
     std::filesystem::path iniOverride;
@@ -1329,6 +1329,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
         else if (std::wcscmp(argv[i], L"--read-ini") == 0) mode = Mode::ReadIni;
         else if (std::wcscmp(argv[i], L"--save-ini") == 0) mode = Mode::SaveIni;
         else if (std::wcscmp(argv[i], L"--generate-schema") == 0) mode = Mode::GenSchema;
+        else if (std::wcscmp(argv[i], L"--serve-only") == 0) mode = Mode::ServeOnly;
         else if (std::wcscmp(argv[i], L"--launch") == 0) mode = Mode::Launch;
         else if (std::wcscmp(argv[i], L"--game") == 0 && i + 1 < argc) gameOverride = argv[++i];
         else if (std::wcscmp(argv[i], L"--ini") == 0 && i + 1 < argc) iniOverride = argv[++i];
@@ -1365,6 +1366,20 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
     case Mode::GenSchema:
         rc = grml::launcher_api::generateSchemaFromJson(readStdinUtf8(), outJson) ? 0 : 1;
         break;
+    case Mode::ServeOnly: {
+        uint16_t port = 0;
+        if (!grml::http_server::start(loaderDir, port)) {
+            std::fprintf(stderr, "Failed to start GRML HTTP server.\n");
+            return 1;
+        }
+        std::printf("GRML_SERVE_URL=http://127.0.0.1:%u/\n", static_cast<unsigned>(port));
+        std::fflush(stdout);
+        // Wait until stdin closes
+        char buf[64];
+        while (std::fread(buf, 1, sizeof(buf), stdin) > 0) {}
+        grml::http_server::stop();
+        return 0;
+    }
     case Mode::Launch: {
         const auto lr = grml::launcher_api::launchGame(loaderDir, gameOverride);
         outJson = lr.json;

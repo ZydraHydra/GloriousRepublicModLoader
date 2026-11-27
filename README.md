@@ -4,6 +4,8 @@
 
 GRML lets you manage Steam Workshop (`784150`) and local DLL mods, tweak mod `.ini` settings from a clean UI or **in-game**, layer non-destructive asset packs, and diagnose crashes or missing Workshop items in your saves—while staying **100% compatible** with existing **RML v1**, **TesmioLoader v3/v4**, and standalone DLL mods.
 
+![GRML Launcher — Mods & Load Order](docs/screenshots/01_mods.png)
+
 ---
 
 ## Features for Players
@@ -44,6 +46,22 @@ All user files live in `%LOCALAPPDATA%\GRML`:
 - `grml_vfs.ini` — Asset Override pack order and toggles
 - `grml_playlists.json` — saved mod playlists
 - `grml.log` & `grml_session.json` — runtime log and last-loaded-save crash breadcrumb
+
+---
+
+## Screenshots
+
+| Save Inspector | Diagnostics & Logs |
+| :---: | :---: |
+| ![Save Inspector](docs/screenshots/04_save_inspector.png) | ![Diagnostics & Logs](docs/screenshots/05_diagnostics.png) |
+
+| Asset Overrides | Playlists |
+| :---: | :---: |
+| ![Asset Overrides](docs/screenshots/03_overrides.png) | ![Playlists](docs/screenshots/02_playlists.png) |
+
+| Loader Settings | External Mod UI Guide |
+| :---: | :---: |
+| ![Loader Settings](docs/screenshots/07_settings.png) | ![External Mod UI Guide](docs/screenshots/06_ui_guide.png) |
 
 ---
 
