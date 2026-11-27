@@ -6,40 +6,54 @@
     "previewfile"     "{PREVIEW_FILE}"
     "visibility"      "{VISIBILITY}"
     "title"           "{WORKSHOP_TITLE}"
-    "description"     "[h1]Hello, Comrade![/h1]Tired of manually editing `.ini` files, guessing why a save crashed, or losing your mod configs every time a loader updates?
+    "description"     "[h1]Hello, Comrade![/h1]Tired of digging through `.ini` text files to tweak mod settings, losing your mod setup when a loader updates, or wondering why a save crashed?
 
-[b]Glorious Republic Mod Loader (GRML)[/b] is a fast, modern, self-contained mod loader, [b]F9[/b] in-game settings hub, non-destructive asset override manager (Media VFS), and Save Inspector for [b]Workers & Resources: Soviet Republic[/b] ([i]SOVIET64.exe 1.2.0.9+[/i]).
+[b]Glorious Republic Mod Loader (GRML)[/b] is a modern, easy-to-use launcher and in-game [b]F9[/b] settings hub for [b]Workers & Resources: Soviet Republic[/b] ([i]SOVIET64.exe 1.2.0.9+[/i]). It keeps your saves backed up, lets you configure mods with sliders and toggles (even in-game), and helps your mods survive game updates.
 
 [b]Version:[/b] v{VERSION} (Alpha) | [b]Source & Releases:[/b] [url=https://github.com/ZydraHydra/GloriousRepublicModLoader]GitHub Repository[/url]
 
-[b]Alpha Field Dispatch:[/b] Treat this release as an early [b]Alpha[/b]. While tested on WRSR 1.2.0.9, native memory hooks and VFS overrides benefit from wider testing across different hardware, mod lists, and large late-game republics. Back up your saves first and report any issues on [url=https://github.com/ZydraHydra/GloriousRepublicModLoader/issues]GitHub Issues[/url]!
+[b]Alpha Notice:[/b] This is an early public [b]Alpha[/b]. While GRML automatically backs up your saves before launch, please still keep manual backups of important republics and report any bugs on [url=https://github.com/ZydraHydra/GloriousRepublicModLoader/issues]GitHub Issues[/url].
 
-[h1]How to Launch (Step-by-Step)[/h1]Because GRML is a standalone Windows x64 launcher (`GloriousRepublicModLoader.exe`) + native runtime (`grml_runtime.dll`), simply clicking Play in Steam will [b]not[/b] start it automatically.
+[h1]How to Use (Step-by-Step)[/h1]Because GRML is a standalone launcher (`GloriousRepublicModLoader.exe`), simply clicking Play in Steam will [b]not[/b] open it automatically:
 
 [list=1]
 [*] Subscribe to [b]Glorious Republic Mod Loader (GRML)[/b] here on Steam Workshop.
-[*] Open the Workshop folder in your Steam Library:
+[*] Open its Workshop folder in your Steam Library:
 [code]<Your Steam Library>\steamapps\workshop\content\784150\{PUBLISHED_FILE_ID}\[/code]
 [*] Run [b]GloriousRepublicModLoader.exe[/b] (Tip: create a Desktop shortcut or add it to Steam as a Non-Steam Game).
-[*] Enable the mods & asset overrides you want, then click [b]Launch WRSR[/b] (or [b]Continue <SaveName>[/b] to boot straight into your latest save).
-[*] Press [b]F9[/b] in-game to open [b]GRML Mod Settings[/b]!
+[*] Turn on the mods you want, adjust their settings if needed, and click [b]Launch WRSR[/b] (or [b]Continue <SaveName>[/b] to jump straight into your latest save).
+[*] Press [b]F9[/b] anytime in-game to open [b]GRML Mod Settings[/b]!
 [/list]
-All your settings, playlists, mod `.ini` configs, and logs are stored safely in [code]%LOCALAPPDATA%\GRML[/code], so Workshop updates never overwrite your configuration.
+All your settings, playlists, mod configs, and save backups live safely in [code]%LOCALAPPDATA%\GRML[/code], so Workshop updates never wipe your setup.
 
-[h1]100% Backwards Compatible[/h1][list]
-[*] Discovers subscribed [b]Steam Workshop (784150)[/b] mods, local `plugins/`, and `workshop_wip/` mods automatically (newly discovered mods start disabled by default).
-[*] Supports [b]*.grml.json[/b], legacy [b]*.rml.json[/b], and manifestless native DLLs.
-[*] Preserves [b]RML API v1[/b], [b]TesmioLoader API v3/v4[/b], and `Local\WRSR_ModOverlay_<PID>` docking.
-[*] Auto-generates structured settings UIs even for legacy mods that only ship a raw `.ini` file!
+[h1]Fewer Broken Mods After Game Updates[/h1]Normally, when *Workers & Resources* receives a patch, native DLL mods can stop working until every individual mod author updates their mod.
+
+[b]GRML's Offsets System is designed to prevent that:[/b]
+[list]
+[*] [b]Centralized per-version offsets:[/b] GRML stores the game memory offsets for each supported WRSR version inside the launcher (`grml_offsets.ini`).
+[*] [b]One-click updates:[/b] When a new WRSR patch drops, you can click [b]Update Offsets (OTA)[/b] in Settings to grab the latest offset definitions without waiting for a full mod-by-mod rebuild.
+[*] [b]Mods keep working:[/b] As soon as GRML has the offsets for the new game version, most compatible mods should continue working automatically—without each mod needing its own update.
+[*] [b]Pre-launch safety check:[/b] Before launching, GRML checks every enabled mod against your game version (`Ready` / `Degraded` / `Needs Offset Update`) and lets you temporarily disable affected mods in one click.
 [/list]
 
-[h1]Key Features for Players[/h1][list]
-[*] [b]Modern Launcher & Playlists:[/b] Filter mods by name, Workshop ID, ABI, or supported game version, check dependencies/conflicts, and switch mod setups in one click with saved Playlists.
-[*] [b]Visual Mod Settings (Launcher + In-Game F9):[/b] Sliders, toggles, dropdowns, and tooltips in both the launcher and the matching [b]F9[/b] in-game overlay.
-[*] [b]Non-Destructive Asset Overrides (Media VFS):[/b] Layer `media_soviet\` / `override\` folders or `.zip` packs with priority ordering and conflict inspection without touching original game files.
-[*] [b]Direct-to-Save Launch & Intro Skip:[/b] Boot straight into your latest or chosen save with anti-crash-loop protection, and skip the 9.5s intro logo timer while indexing runs in the background.
-[*] [b]Save Inspector, Auto-Backups & CrashGuard:[/b] Automatically backs up your saves per WRSR version before launch, inspects missing Workshop IDs (with one-click copy & Steam links), and provides live `grml.log` diagnostics with Windows crash attribution.
-[*] [b]Offsets & Pre-Flight Compatibility:[/b] Live `OK` / `CACHED` / `MISSING` signature status across 6 categories, pre-flight mod compatibility checks, and one-click OTA offset updates from GitHub.
+[h1]What You Get as a Player[/h1][list]
+[*] [b]Visual Mod Settings (Launcher & In-Game F9):[/b] Adjust mod options with sliders, toggles, and dropdowns instead of editing `.ini` files—even for older mods that only include a plain `.ini`.
+[*] [b]Automatic Savegame Backups:[/b] Automatically backs up your saves before launching into per-game-version folders (so switching WRSR versions never overwrites backups), with a live progress bar and configurable retention limit (default: 3 per version).
+[*] [b]Save Inspector & Missing Mod Finder:[/b] Check any save's date, map template, and Workshop dependencies—and copy missing Workshop IDs or open their Steam pages in one click.
+[*] [b]Playlists & Safe Defaults:[/b] Newly discovered mods start disabled until you turn them on. Save your favorite mod combinations as one-click Playlists.
+[*] [b]Non-Destructive Asset Overrides:[/b] Layer texture/model override folders or `.zip` packs with drag-and-drop priority without ever touching your original game files.
+[*] [b]Direct-to-Save Launch & Faster Startup:[/b] Boot straight into your latest save while skipping the 9.5s intro logo delay.
+[*] [b]CrashGuard Diagnostics:[/b] If the game crashes, GRML points out which mod faulted so you can disable it in one click.
+[/list]
+
+[h1]Works With Your Existing Mods[/h1]GRML automatically finds your subscribed Steam Workshop (`784150`) mods, local `plugins/`, and `workshop_wip/` mods—and stays [b]100% compatible[/b] with existing [b]RML[/b], [b]TesmioLoader[/b], and standalone DLL mods.
+
+[h1]For Mod Authors[/h1]Want your mod to use GRML's shared offsets, automatic `F9` / launcher settings UI, or pure-C plugin SDK? Check out the developer docs on GitHub:
+[list]
+[*] [url=https://github.com/ZydraHydra/GloriousRepublicModLoader/blob/main/docs/PLUGIN_SDK.md]Plugin SDK (grml_api.h)[/url]
+[*] [url=https://github.com/ZydraHydra/GloriousRepublicModLoader/blob/main/docs/DECLARATIVE_UI_SCHEMA.md]Declarative UI Schema (.ui.yaml / .ui.json)[/url]
+[*] [url=https://github.com/ZydraHydra/GloriousRepublicModLoader/blob/main/docs/OFFSETS_AND_SIGNATURES.md]Offsets & Signatures Guide[/url] & [url=https://github.com/ZydraHydra/GloriousRepublicModLoader/blob/main/docs/OFFSET_CATALOG.md]Offset Catalog[/url]
+[*] [url=https://github.com/ZydraHydra/GloriousRepublicModLoader/blob/main/docs/ARCHITECTURE.md]Architecture Overview[/url] & [url=https://github.com/ZydraHydra/GloriousRepublicModLoader/blob/main/docs/HOOKING_AND_PERFORMANCE_RULES.md]Hooking & Performance Rules[/url]
 [/list]{CHANGELOG_SECTION}"
     "language"        "english"
     "changenote"      "{CHANGENOTE}"
