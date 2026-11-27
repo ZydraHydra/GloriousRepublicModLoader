@@ -226,12 +226,44 @@ try {
 
   await clickNav("Diagnostics & Logs");
   await sleep(500);
+  await cdp.eval(`
+    (() => {
+      const scrub = (s) => s
+        .replace(/[A-Za-z]:\\\\Users\\\\[^\\\\]+/gi, 'C:\\\\Users\\\\Comrade')
+        .replace(/[A-Za-z]:\\\\[^\\s<"]*?GloriousRepublicModLo[^\\s<"]*/gi, 'C:\\\\Games\\\\GRML')
+        .replace(/[A-Za-z]:\\\\Program Files \\(x86\\)\\\\Steam/gi, 'C:\\\\Program Files (x86)\\\\Steam');
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      let node;
+      while ((node = walker.nextNode())) {
+        if (node.nodeValue) node.nodeValue = scrub(node.nodeValue);
+      }
+      for (const el of document.querySelectorAll('input[type="text"], input:not([type])')) {
+        if (el.value) el.value = scrub(el.value);
+      }
+    })()
+  `);
   await cdp.screenshot(join(outDir, "05_diagnostics.png"));
 
   await clickNav("External Mod UI Guide");
   await cdp.screenshot(join(outDir, "06_ui_guide.png"));
 
   await clickNav("Settings");
+  await cdp.eval(`
+    (() => {
+      const scrub = (s) => s
+        .replace(/[A-Za-z]:\\\\Users\\\\[^\\\\]+/gi, 'C:\\\\Users\\\\Comrade')
+        .replace(/[A-Za-z]:\\\\[^\\s<"]*?GloriousRepublicModLo[^\\s<"]*/gi, 'C:\\\\Games\\\\GRML')
+        .replace(/[A-Za-z]:\\\\Program Files \\(x86\\)\\\\Steam/gi, 'C:\\\\Program Files (x86)\\\\Steam');
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      let node;
+      while ((node = walker.nextNode())) {
+        if (node.nodeValue) node.nodeValue = scrub(node.nodeValue);
+      }
+      for (const el of document.querySelectorAll('input[type="text"], input:not([type])')) {
+        if (el.value) el.value = scrub(el.value);
+      }
+    })()
+  `);
   await cdp.screenshot(join(outDir, "07_settings.png"));
 
   console.log(`All 8 screenshots saved to ${outDir}`);
