@@ -1415,31 +1415,32 @@ void renderBuiltInLoadedModsTab()
         }
     }
 
-    // Built-in Asset Overrides (Media VFS) telemetry & live toggle
+    // Built-in Asset Overrides (Media VFS) read-only active overrides telemetry
     {
         auto& vfs = vfs::VfsIndex::get();
         if (ImGui::CollapsingHeader("Asset Overrides (Media VFS)")) {
-            bool vfsOn = vfs.isEnabled();
-            if (ImGui::Checkbox("Enable Runtime Asset Redirection", &vfsOn)) {
-                vfs.setEnabled(vfsOn);
-            }
-            ImGui::Text("Indexed Files: %zu  |  Conflicts: %zu  |  Redirected Opens: %llu",
-                        vfs.indexedFileCount(),
-                        vfs.conflictCount(),
-                        static_cast<unsigned long long>(vfs_redirect::redirectHits()));
-            if (vfs.packs().empty()) {
-                ImGui::TextDisabled("No override packs found in media_overrides\\ or Workshop.");
+            if (!vfs.isEnabled()) {
+                ImGui::TextDisabled("Asset redirection is disabled in the GRML Launcher.");
             } else {
+                ImGui::Text("Indexed Files: %zu  |  Conflicts: %zu  |  Redirected Opens: %llu",
+                            vfs.indexedFileCount(),
+                            vfs.conflictCount(),
+                            static_cast<unsigned long long>(vfs_redirect::redirectHits()));
+                size_t activeCount = 0;
                 for (size_t pi = 0; pi < vfs.packs().size(); ++pi) {
                     const auto& pk = vfs.packs()[pi];
-                    ImGui::BulletText("#%zu [%s] %s (%zu/%zu files, %zu conflicts)%s",
-                                      pi + 1,
+                    if (!pk.enabled || pk.indexedFiles == 0) continue;
+                    ++activeCount;
+                    ImGui::BulletText("#%zu [%s] %s (%zu/%zu files, %zu conflicts)",
+                                      activeCount,
                                       pk.source == vfs::PackSource::Workshop ? "Workshop" : "Local",
                                       pk.displayName.c_str(),
                                       pk.indexedFiles,
                                       pk.totalFiles,
-                                      pk.conflictCount,
-                                      pk.enabled ? "" : " [Disabled]");
+                                      pk.conflictCount);
+                }
+                if (activeCount == 0) {
+                    ImGui::TextDisabled("No active asset overrides.");
                 }
             }
         }

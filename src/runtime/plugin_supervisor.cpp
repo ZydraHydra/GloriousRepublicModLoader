@@ -380,8 +380,27 @@ GrmlHostApi g_hostApi = {
     &hostGetService,
 };
 
+std::wstring formatHotkeyLabelW(uint16_t vk)
+{
+    if (vk >= VK_F1 && vk <= VK_F12) {
+        return L"F" + std::to_wstring(vk - VK_F1 + 1);
+    }
+    if (vk == VK_INSERT) return L"Insert";
+    if (vk == VK_HOME) return L"Home";
+    if (vk == VK_END) return L"End";
+    if (vk == VK_PRIOR) return L"PageUp";
+    if (vk == VK_NEXT) return L"PageDown";
+    if (vk == VK_PAUSE) return L"Pause";
+    if (vk == VK_SCROLL) return L"ScrollLock";
+    if (vk == VK_OEM_3) return L"~";
+    if ((vk >= 'A' && vk <= 'Z') || (vk >= '0' && vk <= '9')) {
+        return std::wstring(1, static_cast<wchar_t>(vk));
+    }
+    return L"F9";
+}
+
 // ── Safe Menu Version Line Tagging (RVA-free, disp32 repoint) ────────────────
-void installMenuStatusTag(const std::string& wideFmtUtf8)
+void installMenuStatusTag(const std::string& wideFmtUtf8, uint16_t overlayVk)
 {
     if (wideFmtUtf8.empty() || !g_gamePe.base || !g_gamePe.textBase || g_gamePe.textSize < 8) return;
 
@@ -441,7 +460,8 @@ void installMenuStatusTag(const std::string& wideFmtUtf8)
         return;
     }
 
-    const std::wstring tagged = targetFmt + L" | GRML " + utf8ToWide(GRML_BUILD_VERSION);
+    const std::wstring tagged = targetFmt + L" | GRML " + utf8ToWide(GRML_BUILD_VERSION) +
+                                L" [" + formatHotkeyLabelW(overlayVk) + L"]";
     const size_t allocBytes   = (tagged.size() + 1) * sizeof(wchar_t);
 
     // Allocate within +-2 GiB of insnEndPtr
@@ -635,7 +655,8 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
     g_hostApi.hooks = hooks::hookApi();
     vfs_redirect::install(dataRoot, g_gameExePath.parent_path());
     save_events::install(dataRoot);
-    overlay::install(parseHotkeyVk(grmlIni.getString("general", "overlay_hotkey", "F9")));
+    const uint16_t overlayVk = parseHotkeyVk(grmlIni.getString("general", "overlay_hotkey", "F9"));
+    overlay::install(overlayVk);
 
     // Resolve wrsr.resource_get & prepare Tesmio/RML compatibility host
     const uintptr_t resGetAddr = resolveResourceGet(offsetsIni.getString("signatures", "resource_get_anchor", ""));
@@ -932,7 +953,7 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
     overlay::publishLoadedMods(std::move(uiList));
 
     if (grmlIni.getBool("general", "show_menu_status", true)) {
-        installMenuStatusTag(offsetsIni.getString("signatures", "menu_version_fmt_wide", ""));
+        installMenuStatusTag(offsetsIni.getString("signatures", "menu_version_fmt_wide", ""), overlayVk);
     }
 
     {

@@ -10,7 +10,7 @@ GRML lets you manage Steam Workshop (`784150`) and local DLL mods, tweak mod `.i
 
 ## Features for Players
 
-- **Clean, Self-Contained Launcher:** Runs natively via Microsoft Edge WebView2 (`GloriousRepublicModLoader.exe`) with zero extra runtimes to install. All your settings, playlists, and logs are stored safely in `%LOCALAPPDATA%\GRML` so updates never overwrite your configuration.
+- **Clean, Self-Contained Launcher:** Runs natively via Microsoft Edge WebView2 (`GloriousRepublicModLoader.exe`) with zero extra runtimes to install, and checks GitHub Releases for newer GRML versions automatically or on demand from **Settings**. All your settings, playlists, mod configs, and logs are stored safely in `%LOCALAPPDATA%\GRML` so updates never overwrite your configuration.
 - **Playlists & Mod Management:**
   - Automatically discovers subscribed **Steam Workshop (`784150`)** mods, local `plugins/`, and `workshop_wip/` mods.
   - Newly discovered mods start **disabled by default** until you turn them on.
@@ -44,6 +44,7 @@ GRML lets you manage Steam Workshop (`784150`) and local DLL mods, tweak mod `.i
 All user files live in `%LOCALAPPDATA%\GRML`:
 - `grml.ini` — enabled mods, game path, discovery options, and overlay hotkey
 - `grml_vfs.ini` — Asset Override pack order and toggles
+- `configs/<plugin_id>.ini` — update-safe per-mod `.ini` settings for GRML SDK v2 mods
 - `grml_playlists.json` — saved mod playlists
 - `grml.log` & `grml_session.json` — runtime log and last-loaded-save crash breadcrumb
 
@@ -89,7 +90,7 @@ From PowerShell at the repository root:
 ```powershell
 .\build.ps1
 ```
-This builds the SvelteKit static UI (`src/launcher/ui/`), compiles `GloriousRepublicModLoader.exe` (with embedded WebView2 + UI assets) and `grml_runtime.dll` in Release x64 (`/MT`), and outputs the clean 3-file distribution into `build\release\`.
+This builds the SvelteKit static UI (`src/launcher/ui/` -> `build/dist/`), compiles `GloriousRepublicModLoader.exe` (with embedded WebView2 + UI assets) and `grml_runtime.dll` in Release x64 (`/MT`), and outputs the clean 3-file distribution into `build\release\`. Use `.\test.ps1` to run a full rebuild and automatically launch `GloriousRepublicModLoader.exe` once finished.
 
 ### Repository Layout
 ```text
@@ -97,13 +98,16 @@ This builds the SvelteKit static UI (`src/launcher/ui/`), compiles `GloriousRepu
 ├── cmake/                             # CMake asset & offset embedding helpers
 ├── config/                            # Default grml.ini & grml_offsets.ini
 ├── docs/                              # Architecture, SDK, UI Schema & Hooking rules
-├── include/grml_api.h                 # Canonical pure-C host/plugin ABI
+├── include/grml_api.h                 # Canonical pure-C host/plugin ABI (v2)
+├── scripts/                           # Screenshot capture & reference helper scripts
 ├── src/
 │   ├── common/                        # PE/AOB scanner, INI, JSON, Manifest, UI Schema, VFS
 │   ├── launcher/                      # Native Win32 + WebView2 host, HTTP API, injector
 │   │   └── ui/                        # Svelte 5 + SvelteKit UI sources (lib/, routes/, static/)
-│   └── runtime/                       # grml_runtime.dll (F9 hub, CrashGuard, VFS, Compat)
+│   └── runtime/                       # grml_runtime.dll (overlay hub, hook manager, CrashGuard, VFS)
 ├── build.ps1                          # Full clean build script -> build\release\
+├── test.ps1                           # Full clean rebuild + launch GloriousRepublicModLoader.exe
+├── package.json                       # SvelteKit / Vite root toolchain config
 ├── CMakeLists.txt
 ├── CHANGELOG.md
 └── LICENSE                            # MIT License

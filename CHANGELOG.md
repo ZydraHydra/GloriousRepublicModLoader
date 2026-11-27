@@ -4,14 +4,14 @@
 
 ### Highlights & Architecture
 - **Modernized CMake + C++20 (`/MT`) Build:** Standardized native targets (`grml_common`, `grml_injector.exe`, `grml_runtime.dll`) with GitHub Actions Windows x64 release packaging ([.github/workflows/ci-release.yml](.github/workflows/ci-release.yml)).
-- **Deno Desktop Launcher (`launcher-ui/`):** Replaced the legacy Go/Win32 UI with a web-technology Deno Desktop launcher backed by `grml_injector.exe` (`SUBSYSTEM:WINDOWS`, zero console popups).
-- **Canonical Pure-C SDK (`include/grml_api.h`):** Introduced `GrmlPluginInit`, `GrmlHostApi` (single-pass `.text` AOB scanner, centralized `CreateFileW` save events, unified ring-buffer logging), and `GrmlUiApi` (safe ImGui widget wrappers, `RegisterDeclarativeIniTab`, and `ReportHookTiming` telemetry).
-- **100% Backwards Compatibility:** Discovers `*.grml.json`, legacy `*.rml.json`, and manifestless DLLs while preserving RML API v1, TesmioLoader API v3/v4, and `Local\WRSR_ModOverlay_<PID>` docking.
+- **Native Win32 + WebView2 Launcher (`src/launcher/` + `src/launcher/ui/`):** Replaced the legacy Go/Win32 UI with a self-contained `SUBSYSTEM:WINDOWS` Microsoft Edge WebView2 host embedding the SvelteKit 5 SPA and an in-process HTTP API, plus GitHub Release update checking.
+- **Canonical Pure-C SDK v2 (`include/grml_api.h`):** Introduced `GrmlPluginInit`, `GrmlHostApi` (single-pass `.text` AOB scanner, centralized `CreateFileW` save events, unified ring-buffer logging, `%LOCALAPPDATA%\GRML\configs\` path helper, `RegisterService`/`GetService`), `GrmlHookApi` (centralized `MinHook` engine with per-plugin rollback), `GrmlWrsrApi` + `GrmlWrsrOffsets` (shared `IsInGame`, RIP-relative helpers, symbols, and profile-resolved offsets), and `GrmlUiApi` (ImGui widgets/tables, `RegisterDeclarativeIniTab`, standalone `RegisterWindow`, centralized `RegisterHotkey` conflict detection, and `ReportHookTiming` telemetry).
+- **100% Backwards Compatibility:** Discovers `*.grml.json`, legacy `*.rml.json`, and manifestless DLLs while preserving v1 `struct_size` compatibility, RML API v1, TesmioLoader API v3/v4, and `Local\WRSR_ModOverlay_<PID>` docking.
 
 ### Asset Overrides, UI & Reliability
-- **Integrated Asset Overrides (Media VFS):** Built-in `media_soviet\` / `override\` folder and `.zip` VFS redirection (`grml_vfs.ini`), pre-launch **Asset Overrides** priority/conflict manager in the launcher, and live toggle/stats in `F9`.
+- **Integrated Asset Overrides (Media VFS):** Built-in `media_soviet\` / `override\` folder and `.zip` VFS redirection (`grml_vfs.ini`), pre-launch **Asset Overrides** priority/conflict manager in the launcher, and read-only active override stats in-game.
 - **Universal Declarative UI & Auto INI Scanner:** Added `<Mod>.ui.yaml`, `<Mod>.ui.json`, and `"settingsUi"` support plus an automatic `.ini` scanner & UI builder that infers controls, Title Case labels, ranges, and comment tooltips while preserving existing `.ini` comments on save.
-- **Safety & Diagnostics:** Added opt-in default (`enabled=0`) for newly discovered mods/packs, SEH-guarded plugin loading with per-plugin hook rollback and unload on startup failure, SEH-sandboxed `F9` tabs, `CrashGuard` unhandled-exception blame logging, and launch-driven Crash Attribution in the launcher.
+- **Safety & Diagnostics:** Added opt-in default (`enabled=0`) for newly discovered mods/packs, SEH-guarded plugin loading with per-plugin hook rollback and unload on startup failure, SEH-sandboxed in-game tabs/windows, `CrashGuard` unhandled-exception blame logging, main-menu `GRML <ver> [<hotkey>]` status tag, and launch-driven Crash Attribution in the launcher.
 
 ---
 
