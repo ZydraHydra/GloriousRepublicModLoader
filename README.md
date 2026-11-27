@@ -73,6 +73,7 @@ GRML provides a pure-C ABI (`include/grml_api.h`), declarative UI schemas (`*.ui
 ### Developer Documentation
 - [Architecture Overview](docs/ARCHITECTURE.md)
 - [Plugin SDK (`include/grml_api.h`)](docs/PLUGIN_SDK.md)
+- [Offsets, PE-Hash Caching & `gen_sig.py`](docs/OFFSETS_AND_SIGNATURES.md)
 - [Declarative & Auto-Built UI Schema](docs/DECLARATIVE_UI_SCHEMA.md)
 - [Hooking & Performance Rules](docs/HOOKING_AND_PERFORMANCE_RULES.md)
 - [Repository Guidelines (`AGENTS.md`)](AGENTS.md)

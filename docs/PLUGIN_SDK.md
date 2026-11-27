@@ -25,6 +25,7 @@ Mods compiled with `/MT` can continue exporting `RmlPluginQuery` / `RmlPluginLoa
 - **`GetGameInfo(&info)`:** Returns `SOVIET64.exe` image base/size, PE `TimeDateStamp`, version string, SHA-256, and GRML version.
 - **`GetPluginConfigPath(plugin_id, default_ini_path, out_buf, cap)` *(v2)*:** Resolves `%LOCALAPPDATA%\GRML\configs\<plugin_id>.ini` (update-safe across Workshop updates) and seeds it from `default_ini_path` if missing.
 - **`RegisterService(name, version, ptr)` / `GetService(name, version)` *(v2)*:** Inter-mod service registry.
+- **`ResolveNamedOffset(section_name, &out_value)` *(v2)*:** Resolves a declarative section from `grml_offsets.ini` (e.g. `"in_game_flag"`, `"evaluate_dist_task"`), returning `1` on `OK`/`CACHED` and `0` on `MISSING`. Guaranteed ready inside `GrmlPostScanFn`.
 - **`hooks` (`GrmlHookApi*`) *(v2)*:** Centralized `MinHook` engine (`CreateHook`, `CreateApiHook`, `EnableHook`, `DisableHook`, `RemoveHook`) with per-plugin rollback on failure or shutdown.
 - **`wrsr` (`GrmlWrsrApi*`) *(v2)*:** Shared WRSR helpers (`IsInGame`, `ResolveRipTarget`, `GetSymbol`, `GetOffsets` -> `GrmlWrsrOffsets`, `GetTextSection`) backed by `grml_offsets.ini`.
 
