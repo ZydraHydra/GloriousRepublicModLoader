@@ -8,6 +8,7 @@
 	import ModsView from '$lib/views/ModsView.svelte';
 	import OverridesView from '$lib/views/OverridesView.svelte';
 	import SaveInspectorView from '$lib/views/SaveInspectorView.svelte';
+	import OffsetsView from '$lib/views/OffsetsView.svelte';
 	import DiagnosticsView from '$lib/views/DiagnosticsView.svelte';
 	import SchemaHelpView from '$lib/views/SchemaHelpView.svelte';
 	import SettingsView from '$lib/views/SettingsView.svelte';
@@ -16,6 +17,10 @@
 		(app.discovery?.mods || []).filter((m) => m.enabled && !m.blocked).length
 	);
 	const totalCount = $derived((app.discovery?.mods || []).length);
+	const totalOffsets = $derived((app.discovery?.offsets || []).length);
+	const okOffsets = $derived(
+		(app.discovery?.offsets || []).filter((o) => o.status === 'OK' || o.status === 'CACHED').length
+	);
 	const verLabel = $derived(
 		app.discovery && app.discovery.gameVersion !== 'unknown'
 			? t('header.wrsrVersion', { version: app.discovery.gameVersion })
@@ -221,6 +226,16 @@
 			</button>
 			<button
 				class="nav-btn"
+				class:active={app.activeView === 'offsets'}
+				onclick={() => app.switchView('offsets')}
+			>
+				<span>{t('nav.offsets')}</span>
+				{#if totalOffsets > 0}
+					<span class="count-pill">{okOffsets}/{totalOffsets}</span>
+				{/if}
+			</button>
+			<button
+				class="nav-btn"
 				class:active={app.activeView === 'diagnostics'}
 				onclick={() => app.switchView('diagnostics')}
 			>
@@ -256,6 +271,8 @@
 					<OverridesView />
 				{:else if app.activeView === 'saves'}
 					<SaveInspectorView />
+				{:else if app.activeView === 'offsets'}
+					<OffsetsView />
 				{:else if app.activeView === 'diagnostics'}
 					<DiagnosticsView />
 				{:else if app.activeView === 'schema-help'}

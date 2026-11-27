@@ -39,6 +39,7 @@
 		"mods": "Mody i kolejność ładowania",
 		"overrides": "Nadpisania zasobów",
 		"saves": "Inspektor zapisów",
+		"offsets": "Offsety i sygnatury",
 		"diagnostics": "Diagnostyka i logi",
 		"schemaHelp": "Poradnik UI zewnętrznych modów",
 		"settings": "Ustawienia"

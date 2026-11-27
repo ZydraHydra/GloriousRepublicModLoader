@@ -39,6 +39,7 @@
 		"mods": "Mods & Load Order",
 		"overrides": "Asset Overrides",
 		"saves": "Save Inspector",
+		"offsets": "Offsets & Signatures",
 		"diagnostics": "Diagnostics & Logs",
 		"schemaHelp": "External Mod UI Guide",
 		"settings": "Settings"

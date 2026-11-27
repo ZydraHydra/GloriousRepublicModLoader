@@ -39,6 +39,7 @@
 		"mods": "Mod とロード順",
 		"overrides": "アセット上書き",
 		"saves": "セーブインスペクタ",
+		"offsets": "オフセットと署名",
 		"diagnostics": "診断とログ",
 		"schemaHelp": "外部 Mod UI ガイド",
 		"settings": "設定"

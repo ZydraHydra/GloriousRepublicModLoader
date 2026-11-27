@@ -1,0 +1,205 @@
+<script lang="ts">
+	import { app } from '$lib/stores/app.svelte';
+	import { t } from '$lib/i18n/index.svelte';
+	import { Badge, Button, PanelCard } from '$lib/components/ui';
+
+	const offsetEntries = $derived(app.discovery?.offsets ?? []);
+	const missingOffsetCount = $derived(
+		offsetEntries.filter((o) => o.status === 'MISSING').length
+	);
+	const resolvedOffsetCount = $derived(
+		offsetEntries.filter((o) => o.status === 'OK' || o.status === 'CACHED').length
+	);
+	const missingCoreOffsets = $derived(
+		offsetEntries.filter((o) => o.required && o.status === 'MISSING')
+	);
+	const groupedOffsets = $derived.by(() => {
+		const order = [
+			'Core',
+			'TimeAndSim',
+			'Economy',
+			'EntityManagers',
+			'Templates',
+			'SaveLoad',
+			'CameraAndUI',
+			'General'
+		];
+		const map = new Map<string, typeof offsetEntries>();
+		for (const e of offsetEntries) {
+			const cat = e.category || 'General';
+			if (!map.has(cat)) map.set(cat, []);
+			map.get(cat)!.push(e);
+		}
+		const out: Array<{ category: string; items: typeof offsetEntries }> = [];
+		for (const c of order) {
+			if (map.has(c)) {
+				out.push({ category: c, items: map.get(c)! });
+				map.delete(c);
+			}
+		}
+		for (const [c, items] of map.entries()) {
+			out.push({ category: c, items });
+		}
+		return out;
+	});
+
+	function offsetBadgeVariant(status: string): 'ready' | 'grml' | 'warn' | 'default' {
+		if (status === 'OK') return 'ready';
+		if (status === 'CACHED') return 'grml';
+		if (status === 'MISSING') return 'warn';
+		return 'default';
+	}
+</script>
+
+<div class="panel offsets-panel">
+	<div class="offsets-header">
+		<div>
+			<h2 style="margin:0;">{t('diagnostics.offsetsSection')}</h2>
+			{#if app.discovery?.offsetsHash}
+				<div class="muted" style="font-size:12px;margin-top:3px;">
+					<code>grml_offsets.ini</code> FNV-1a: <code>{app.discovery.offsetsHash}</code>
+					{#if app.discovery.gameVersion && app.discovery.gameVersion !== 'unknown'}
+						· WRSR <code>{app.discovery.gameVersion}</code>
+					{/if}
+					· {resolvedOffsetCount}/{offsetEntries.length}
+					{#if missingOffsetCount > 0}
+						· <span style="color:var(--danger);">{t('diagnostics.offsetsMissing', { count: missingOffsetCount })}</span>
+					{/if}
+				</div>
+			{/if}
+		</div>
+		<div class="offsets-actions">
+			{#if app.offsetsOtaResult}
+				{#if app.offsetsOtaResult.ok}
+					<Badge variant={app.offsetsOtaResult.updated ? 'grml' : 'ready'}>
+						{app.offsetsOtaResult.updated ? t('diagnostics.offsetsUpdated') : t('diagnostics.offsetsUpToDate')}
+					</Badge>
+				{:else}
+					<Badge variant="warn">{app.offsetsOtaResult.error || t('diagnostics.otaFailed')}</Badge>
+				{/if}
+			{/if}
+			<Button size="sm" onclick={() => app.fetchState()}>{t('diagnostics.refreshBtn')}</Button>
+			<Button size="sm" disabled={app.updatingOffsets} onclick={() => app.updateOffsetsOta()}>
+				{app.updatingOffsets ? t('common.updating') : t('diagnostics.updateOffsetsOta')}
+			</Button>
+		</div>
+	</div>
+
+	<div class="offsets-body">
+		{#if missingCoreOffsets.length > 0}
+			<PanelCard tone="danger">
+				<div class="control-label" style="color:var(--danger);">
+					AOB_MISSING — Required Core offset(s) missing: {missingCoreOffsets.map((o) => o.name).join(', ')}
+				</div>
+			</PanelCard>
+		{/if}
+		{#if offsetEntries.length === 0}
+			<PanelCard>
+				<div class="muted">{t('diagnostics.noOffsets')}</div>
+			</PanelCard>
+		{:else}
+			{#each groupedOffsets as grp (grp.category)}
+				<PanelCard>
+					<div class="diag-label" style="margin-bottom:6px;">
+						{grp.category} ({grp.items.length})
+					</div>
+					<div class="offsets-table-wrap">
+						<table class="offsets-table">
+							<thead>
+								<tr>
+									<th>{t('diagnostics.colSection')}</th>
+									<th>Tier</th>
+									<th>{t('diagnostics.colStatus')}</th>
+									<th>{t('diagnostics.colResolveMode')}</th>
+									<th>{t('diagnostics.colVerifiedBuild')}</th>
+									<th>{t('diagnostics.colRvaTarget')}</th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each grp.items as entry (entry.name)}
+									<tr title={entry.anchorXref ? t('diagnostics.anchorTooltip', { anchor: entry.anchorXref }) : ''}>
+										<td>
+											<code>[{entry.name}]</code>
+											{#if entry.anchorXref}
+												<div class="muted" style="font-size:10px;">{entry.anchorXref}</div>
+											{/if}
+										</td>
+										<td>
+											<Badge variant={entry.required ? 'warn' : 'default'}>
+												{entry.required ? 'Required' : 'Optional'}
+											</Badge>
+										</td>
+										<td>
+											<Badge variant={offsetBadgeVariant(entry.status)}>{entry.status}</Badge>
+										</td>
+										<td><code>{entry.resolve}</code></td>
+										<td>{entry.verifiedBuild || '—'}</td>
+										<td>
+											{#if entry.status === 'OK' || entry.status === 'CACHED'}
+												<code>{entry.rva || '—'}</code>
+												{#if entry.resolved}
+													<span class="muted"> → </span><code>{entry.resolved}</code>
+												{/if}
+											{:else}
+												<span class="muted">{t('diagnostics.matchesCount', { count: entry.matchCount })}</span>
+											{/if}
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				</PanelCard>
+			{/each}
+		{/if}
+	</div>
+</div>
+
+<style>
+	.offsets-panel {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+	}
+	.offsets-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: flex-start;
+		gap: 12px;
+		flex-wrap: wrap;
+	}
+	.offsets-actions {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+	.offsets-body {
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+	}
+	.offsets-table-wrap {
+		overflow-x: auto;
+	}
+	.offsets-table {
+		width: 100%;
+		border-collapse: collapse;
+		font-size: 12px;
+	}
+	.offsets-table th,
+	.offsets-table td {
+		text-align: left;
+		padding: 6px 8px;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+	}
+	.offsets-table th {
+		font-size: 10px;
+		text-transform: uppercase;
+		letter-spacing: 0.5px;
+		color: var(--muted);
+	}
+	.offsets-table tr:last-child td {
+		border-bottom: none;
+	}
+</style>

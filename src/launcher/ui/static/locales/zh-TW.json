@@ -39,6 +39,7 @@
 		"mods": "模組與載入順序",
 		"overrides": "資源覆蓋",
 		"saves": "存檔檢查器",
+		"offsets": "偏移與簽章",
 		"diagnostics": "診斷與日誌",
 		"schemaHelp": "外部模組 UI 指南",
 		"settings": "設定"

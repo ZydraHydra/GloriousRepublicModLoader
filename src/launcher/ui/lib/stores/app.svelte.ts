@@ -6,6 +6,7 @@ export type ViewId =
 	| 'mods'
 	| 'overrides'
 	| 'saves'
+	| 'offsets'
 	| 'diagnostics'
 	| 'schema-help'
 	| 'settings';
