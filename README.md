@@ -89,7 +89,7 @@ From PowerShell at the repository root:
 ```powershell
 .\build.ps1
 ```
-This builds the SvelteKit static UI (`src/launcher-ui/web/`), compiles `GloriousRepublicModLoader.exe` (with embedded WebView2 + UI assets) and `grml_runtime.dll` in Release x64 (`/MT`), and outputs the clean 3-file distribution into `build\release\`.
+This builds the SvelteKit static UI (`src/launcher/ui/`), compiles `GloriousRepublicModLoader.exe` (with embedded WebView2 + UI assets) and `grml_runtime.dll` in Release x64 (`/MT`), and outputs the clean 3-file distribution into `build\release\`.
 
 ### Repository Layout
 ```text
@@ -101,7 +101,7 @@ This builds the SvelteKit static UI (`src/launcher-ui/web/`), compiles `Glorious
 ├── src/
 │   ├── common/                        # PE/AOB scanner, INI, JSON, Manifest, UI Schema, VFS
 │   ├── launcher/                      # Native Win32 + WebView2 host, HTTP API, injector
-│   ├── launcher-ui/web/               # Svelte 5 + SvelteKit static UI + reusable components
+│   │   └── ui/                        # Svelte 5 + SvelteKit static UI + reusable components
 │   └── runtime/                       # grml_runtime.dll (F9 hub, CrashGuard, VFS, Compat)
 ├── build.ps1                          # Full clean build script -> build\release\
 ├── CMakeLists.txt

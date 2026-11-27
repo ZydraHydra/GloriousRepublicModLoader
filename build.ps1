@@ -12,7 +12,7 @@ if (Test-Path $BuildDir) {
 }
 
 Write-Host "==> Building SvelteKit UI..." -ForegroundColor Cyan
-Push-Location (Join-Path $Root "src\launcher-ui\web")
+Push-Location (Join-Path $Root "src\launcher\ui")
 try {
     if (-not (Test-Path "node_modules")) {
         npm install

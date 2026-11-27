@@ -24,11 +24,11 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
-          cache-dependency-path: src/launcher-ui/web/package-lock.json
+          cache-dependency-path: src/launcher/ui/package-lock.json
 
       - name: Build SvelteKit UI
         shell: pwsh
-        working-directory: src/launcher-ui/web
+        working-directory: src/launcher/ui
         run: |
           npm ci
           npm run check

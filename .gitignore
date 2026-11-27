@@ -47,7 +47,7 @@ install_manifest.txt
 # Node & SvelteKit
 node_modules/
 .svelte-kit/
-src/launcher-ui/dist/
+src/launcher/dist/
 
 # Python caches
 __pycache__/

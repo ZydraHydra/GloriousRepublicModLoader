@@ -28,9 +28,9 @@ Thank you for contributing to **GRML**! Please review these guidelines before op
 
 Before submitting a PR:
 
-1. **SvelteKit UI Check (`src/launcher-ui/web/`):**
+1. **SvelteKit UI Check (`src/launcher/ui/`):**
    ```powershell
-   cd src/launcher-ui/web
+   cd src/launcher/ui
    npm run check
    npm run build
    ```
