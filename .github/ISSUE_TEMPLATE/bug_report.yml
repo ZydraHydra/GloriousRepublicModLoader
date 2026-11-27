@@ -1,0 +1,88 @@
+name: Bug Report
+description: Report a crash, launcher error, VFS issue, or in-game F9 overlay bug in GRML.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting an issue! Because GRML injects `grml_runtime.dll` into `SOVIET64.exe` and manages mods/saves, your `grml.log` and WRSR version make debugging much faster.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected Area
+      options:
+        - Launcher UI / Mod Discovery
+        - In-Game F9 Overlay
+        - Asset Overrides (Media VFS)
+        - Save Inspector / Direct-to-Save Launch
+        - Offsets & Signatures / Pre-Flight Check
+        - RML / TesmioLoader Compatibility
+        - Build / CI / Scripts
+    validations:
+      required: true
+
+  - type: input
+    id: grml_version
+    attributes:
+      label: GRML Version & Source
+      description: e.g. `v2.1.0-alpha.1 (Steam Workshop)`, `v2.1.0 (GitHub Release)`, or `self-built from main`
+      placeholder: "v2.1.0-alpha.1 (Steam Workshop / GitHub Release)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: wrsr_version
+    attributes:
+      label: WRSR Game Version
+      options:
+        - 1.2.0.9
+        - 1.2.0.8
+        - 1.1.1.13
+        - 1.1.1.9
+        - 1.1.1.7
+        - Newer / Unlisted WRSR version
+    validations:
+      required: true
+
+  - type: input
+    id: active_mods
+    attributes:
+      label: Active DLL Mods & Asset Packs
+      description: List any enabled DLL mods or Asset Override packs (or `None`).
+      placeholder: "None / TradePriceLimits, CustomsSpeedControl / ..."
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What Happened?
+      description: Clear description of the bug, plus what you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to Reproduce
+      placeholder: |
+        1. Open GloriousRepublicModLoader.exe
+        2. Enable ...
+        3. Launch WRSR / press F9 and observe ...
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log Output (`%LOCALAPPDATA%\GRML\grml.log`)
+      description: Found in `%LOCALAPPDATA%\GRML\grml.log` (or click Copy/Open Logs in Diagnostics). Please redact any personal Windows username paths if needed.
+      render: log
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission Checks
+      options:
+        - label: I checked existing issues and the README / docs.
+          required: true
+        - label: My saves are backed up before testing alpha builds.
+          required: false

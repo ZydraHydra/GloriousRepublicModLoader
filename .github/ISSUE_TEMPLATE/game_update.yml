@@ -1,0 +1,32 @@
+name: New WRSR Game Update / Broken Offsets
+description: Report a new Workers & Resources game patch where grml_offsets.ini signatures need verification.
+title: "[Game Update] WRSR "
+labels: ["game-update"]
+body:
+  - type: input
+    id: wrsr_version
+    attributes:
+      label: New WRSR Game Version
+      placeholder: "e.g. 1.2.1.0 (Steam / GOG / Beta branch)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: behavior
+    attributes:
+      label: What Happened on Launch / In-Game?
+      options:
+        - One or more offsets show MISSING on the Offsets & Signatures page
+        - Direct-to-Save Launch or Intro Skip stopped working
+        - In-game F9 overlay failed to attach or game crashed on load
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Startup Log (`%LOCALAPPDATA%\GRML\grml.log`) & Missing Offset Names
+      description: Paste the startup section showing `SOVIET64.exe` PE hash/timestamp and any `MISSING` offset names from the Offsets & Signatures tab.
+      render: log
+    validations:
+      required: true

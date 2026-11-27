@@ -320,6 +320,20 @@
 		"downloadBtn": "Download ↗",
 		"upToDateBadge": "Up to date",
 		"checkFailedBadge": "Check failed",
-		"checkUpdatesBtn": "Check for Updates"
+		"checkUpdatesBtn": "Check for Updates",
+		"devModeLabel": "Developer Mode (Shared Path Overrides)",
+		"devModeActiveBadge": "Active",
+		"devModeTip": "Redirect savegames, Steam Workshop (<code>784150</code>), <code>workshop_wip</code>, and <code>media_overrides</code> to shared folders regardless of which <code>SOVIET64.exe</code> copy is launched (<code>dev_mode</code> in <code>grml.ini</code>).",
+		"devSavePathLabel": "Savegame Folder Override (replaces <code>media_soviet\\save</code>)",
+		"devWorkshopPathLabel": "Steam Workshop Override (replaces <code>workshop\\content\\784150</code>)",
+		"devWipPathLabel": "Workshop WIP Override (replaces <code>media_soviet\\workshop_wip</code>)",
+		"devOverridesPathLabel": "Media Overrides Folder (replaces <code>media_overrides</code>)",
+		"devPathPlaceholder": "Leave empty to use default game path",
+		"browseBtn": "Browse...",
+		"fillSteamDefaultsBtn": "Fill Steam Defaults",
+		"sectionLauncher": "Launcher & Updates",
+		"sectionGameDiscovery": "Game & Mod Discovery",
+		"sectionInGame": "In-Game Overlay & Startup",
+		"sectionDeveloper": "Offsets & Developer Tools"
 	}
 }

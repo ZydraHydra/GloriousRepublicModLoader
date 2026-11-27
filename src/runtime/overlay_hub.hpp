@@ -35,7 +35,8 @@ struct DirectSaveLoadTargets {
 
 void setInGameFlagPtr(const volatile uint8_t* ptr) noexcept;
 void setDirectSaveLoadTargets(const DirectSaveLoadTargets& targets,
-                              const std::filesystem::path& gameDir);
+                              const std::filesystem::path& gameDir,
+                              const std::filesystem::path& saveRootOverride = {});
 void setPluginsDirectory(const std::filesystem::path& pluginsDir);
 void publishLoadedMods(std::vector<LoadedModSummary> mods);
 bool hasRegisteredTabForPlugin(const std::string& pluginId);

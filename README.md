@@ -1,6 +1,19 @@
-# Glorious Republic Mod Loader (GRML)
+<div align="center">
+  <img src="src/launcher/ui/static/logo.png" width="112" alt="GRML Logo" />
+  <h1>Glorious Republic Mod Loader (GRML)</h1>
+  <p>
+    <strong>Version 2.1.0 (Alpha)</strong> — A fast, lightweight mod loader, <code>F9</code> in-game settings hub, non-destructive asset override manager, and Save Inspector for <strong>Workers &amp; Resources: Soviet Republic</strong> (<code>SOVIET64.exe 1.2.0.9+</code>).
+  </p>
+  <p>
+    <a href="https://github.com/ZydraHydra/GloriousRepublicModLoader/actions/workflows/ci-release.yml"><img src="https://github.com/ZydraHydra/GloriousRepublicModLoader/actions/workflows/ci-release.yml/badge.svg" alt="Build &amp; Release" /></a>
+    <a href="https://github.com/ZydraHydra/GloriousRepublicModLoader/releases"><img src="https://img.shields.io/github/v/release/ZydraHydra/GloriousRepublicModLoader?include_prereleases&amp;label=release" alt="GitHub Release" /></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License" /></a>
+    <img src="https://img.shields.io/badge/platform-Windows%20x64-0078D6.svg" alt="Windows x64" />
+    <img src="https://img.shields.io/badge/WRSR-1.2.0.9%2B-C89A3A.svg" alt="WRSR 1.2.0.9+" />
+  </p>
+</div>
 
-**Version 2.0.0** — A fast, lightweight mod loader, in-game settings hub, asset override manager, and save inspector for **Workers & Resources: Soviet Republic (`SOVIET64.exe` `1.2.0.9+`)**.
+> **Alpha Release Notice:** GRML is currently in **public Alpha**. Native memory hooks and Media VFS overrides have been tested on WRSR `1.2.0.9`, and wider testing across hardware, mod lists, and large late-game republics is ongoing. Please back up your saves in `media_soviet\save\` before testing and report any issues or new game patch offsets via [GitHub Issues](https://github.com/ZydraHydra/GloriousRepublicModLoader/issues).
 
 GRML lets you manage Steam Workshop (`784150`) and local DLL mods, tweak mod `.ini` settings from a clean UI or **in-game**, layer non-destructive asset packs, and diagnose crashes or missing Workshop items in your saves—while staying **100% compatible** with existing **RML v1**, **TesmioLoader v3/v4**, and standalone DLL mods.
 
@@ -74,6 +87,9 @@ All user files live in `%LOCALAPPDATA%\GRML`:
 ### Offsets & Signatures
 ![Offsets & Signatures](docs/screenshots/08_offsets.png)
 
+### In-Game Overlay (`F9`)
+![In-Game F9 Overlay](docs/screenshots/09_ingame_overlay.jpg)
+
 ---
 
 ## For Mod Authors & Developers
@@ -90,6 +106,10 @@ GRML provides a pure-C ABI (`include/grml_api.h`), declarative UI schemas (`*.ui
 - [Hooking & Performance Rules](docs/HOOKING_AND_PERFORMANCE_RULES.md)
 - [Repository Guidelines (`AGENTS.md`)](AGENTS.md)
 - [Contributing Guide](CONTRIBUTING.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Security Policy](SECURITY.md)
+- [Changelog](CHANGELOG.md)
+- [Alpha Release & Marketing Kit](docs/MARKETING.md)
 
 ### Building from Source
 

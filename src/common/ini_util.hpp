@@ -62,4 +62,9 @@ struct IniKeyUpdate {
 bool updateIniFilePreservingComments(const std::filesystem::path& path,
                                      const std::vector<IniKeyUpdate>& updates);
 
+// Ensures every key in embeddedDefaultIni exists in targetIniPath (preserving
+// existing user values, comments, and formatting). Creates targetIniPath if missing.
+bool syncDefaultIniKeys(const std::filesystem::path& targetIniPath,
+                        std::string_view embeddedDefaultIni);
+
 } // namespace grml

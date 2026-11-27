@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Releases & Downloads
+    url: https://github.com/ZydraHydra/GloriousRepublicModLoader/releases
+    about: Download the latest GRML Windows x64 release archive.
+  - name: Documentation
+    url: https://github.com/ZydraHydra/GloriousRepublicModLoader/tree/main/docs
+    about: Read the Plugin SDK, Declarative UI Schema, Offsets, and Architecture docs.

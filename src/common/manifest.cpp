@@ -202,10 +202,11 @@ DiscoveryResult discoverAllPlugins(const std::filesystem::path& loaderBaseDir,
 
     const bool scanWorkshop = grmlConfig.getBool("general", "scan_workshop", true);
     const bool scanWip      = grmlConfig.getBool("general", "scan_workshop_wip", true);
+    const EffectiveGamePaths effPaths = resolveEffectiveGamePaths(gameExePath, grmlConfig);
 
     std::error_code ec;
-    if (scanWorkshop && !gameExePath.empty()) {
-        const auto wsRoot = workshopRootFromGameExe(gameExePath);
+    if (scanWorkshop && !effPaths.workshopRoot.empty()) {
+        const auto& wsRoot = effPaths.workshopRoot;
         if (std::filesystem::is_directory(wsRoot, ec)) {
             for (const auto& item : std::filesystem::directory_iterator(wsRoot, ec)) {
                 if (!item.is_directory(ec)) continue;
@@ -224,8 +225,8 @@ DiscoveryResult discoverAllPlugins(const std::filesystem::path& loaderBaseDir,
         }
     }
 
-    if (scanWip && !gameExePath.empty()) {
-        const auto wipRoot = gameExePath.parent_path() / L"media_soviet" / L"workshop_wip";
+    if (scanWip && !effPaths.workshopWipRoot.empty()) {
+        const auto& wipRoot = effPaths.workshopWipRoot;
         if (std::filesystem::is_directory(wipRoot, ec)) {
             for (const auto& item : std::filesystem::directory_iterator(wipRoot, ec)) {
                 if (item.is_directory(ec)) {

@@ -738,11 +738,40 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
             : g_loaderRoot / L"plugins";
     overlay::setPluginsDirectory(pluginsDir);
 
+    // Resolve dev-mode / shared path overrides (saves, workshop, workshop_wip, media_overrides)
+    const EffectiveGamePaths effPaths = resolveEffectiveGamePaths(g_gameExePath, grmlIni);
+    vfs_redirect::DevPathOverrides devOverrides;
+    if (effPaths.devMode) {
+        devOverrides.enabled = true;
+        if (grmlIni.getBool("general", "dev_save_enabled", false) &&
+            !grmlIni.getString("general", "dev_save_path", "").empty()) {
+            devOverrides.saveRoot = effPaths.saveRoot;
+        }
+        if (grmlIni.getBool("general", "dev_workshop_enabled", false) &&
+            !grmlIni.getString("general", "dev_workshop_path", "").empty()) {
+            devOverrides.workshopRoot = effPaths.workshopRoot;
+        }
+        if (grmlIni.getBool("general", "dev_workshop_wip_enabled", false) &&
+            !grmlIni.getString("general", "dev_workshop_wip_path", "").empty()) {
+            devOverrides.workshopWipRoot = effPaths.workshopWipRoot;
+        }
+        if (grmlIni.getBool("general", "dev_overrides_enabled", false) &&
+            !grmlIni.getString("general", "dev_overrides_path", "").empty()) {
+            devOverrides.overridesRoot = effPaths.overridesRoot;
+        }
+        logger::logMessage(GRML_LOG_INFO, "DevMode",
+                           "Dev path overrides active (save='%s', workshop='%s', wip='%s', overrides='%s')",
+                           wideToUtf8(devOverrides.saveRoot.wstring()).c_str(),
+                           wideToUtf8(devOverrides.workshopRoot.wstring()).c_str(),
+                           wideToUtf8(devOverrides.workshopWipRoot.wstring()).c_str(),
+                           wideToUtf8(devOverrides.overridesRoot.wstring()).c_str());
+    }
+
     // Install centralized hooks, CrashGuard, Media VFS & DX11 F9 hub
     g_prevExceptionFilter = SetUnhandledExceptionFilter(&grmlUnhandledExceptionFilter);
     g_hostApi.ui    = overlay::uiApi();
     g_hostApi.hooks = hooks::hookApi();
-    vfs_redirect::install(dataRoot, g_gameExePath.parent_path());
+    vfs_redirect::install(dataRoot, g_gameExePath.parent_path(), devOverrides);
     save_events::install(dataRoot);
     const uint16_t overlayVk = parseHotkeyVk(grmlIni.getString("general", "overlay_hotkey", "F9"));
     overlay::install(overlayVk);
@@ -757,7 +786,8 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
 
     // Prepare declarative grml_offsets.ini entries + PE-hash RVA cache check
     const std::filesystem::path offsetCachePath = dataRoot / L"grml_offset_cache.ini";
-    const std::vector<offsets::OffsetDefinition> offsetDefs = offsets::collectOffsetDefinitions(offsetsIni);
+    const std::vector<offsets::OffsetDefinition> offsetDefs = offsets::collectOffsetDefinitions(
+        offsetsIni, g_gameVersion == "unknown" ? std::string_view{} : g_gameVersion);
     bool allOffsetsCached = false;
     std::vector<void*> declMatchSites(offsetDefs.size(), nullptr);
     std::vector<AobPatternRequest> declScans;
@@ -1164,12 +1194,12 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
         dsl.loadRequestedPtr = static_cast<volatile uint8_t*>(resolveRipRelativeDisp32(loadSaveTrigSite, reqDisp, reqNext));
         dsl.newGameFlagPtr   = static_cast<volatile uint8_t*>(resolveRipRelativeDisp32(loadSaveTrigSite, ngDisp, ngNext));
 
-        overlay::setDirectSaveLoadTargets(dsl, g_gameExePath.parent_path());
+        overlay::setDirectSaveLoadTargets(dsl, g_gameExePath.parent_path(), effPaths.saveRoot);
         logger::logMessage(GRML_LOG_INFO, "AOBScanner",
                            "Direct-to-Save targets resolved (menuObj=0x%p loadFn=0x%p uiStateOff=0x%X)",
                            dsl.mainMenuObj, dsl.loadSaveHeaderFn, dsl.uiStateOff);
     } else {
-        overlay::setDirectSaveLoadTargets({}, g_gameExePath.parent_path());
+        overlay::setDirectSaveLoadTargets({}, g_gameExePath.parent_path(), effPaths.saveRoot);
         logger::logMessage(GRML_LOG_WARN, "DirectLoad",
                            "One or more Direct-to-Save signatures missed (menuLoop=%d uiState=%d loadHdr=%d loadTrig=%d) — auto-load disabled",
                            menuLoopSite != nullptr, menuUiStateSite != nullptr,

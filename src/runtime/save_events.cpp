@@ -334,9 +334,18 @@ HANDLE WINAPI detourCreateFileW(LPCWSTR               lpFileName,
 {
     const bool isWriteOpen = (dwDesiredAccess & (GENERIC_WRITE | FILE_WRITE_DATA | FILE_APPEND_DATA)) != 0;
     wchar_t vfsNormBuf[vfs_redirect::kNormBufCap];
+    wchar_t devNormBuf[vfs_redirect::kNormBufCap];
+    bool redirectedByDevSave = false;
+    bool redirected = false;
     if (!isWriteOpen && dwCreationDisposition == OPEN_EXISTING) {
-        if (const wchar_t* redirected = vfs_redirect::tryResolveReadOnlyW(lpFileName, vfsNormBuf)) {
-            lpFileName = redirected;
+        if (const wchar_t* r = vfs_redirect::tryResolveReadOnlyW(lpFileName, vfsNormBuf)) {
+            lpFileName = r;
+            redirected = true;
+        }
+    }
+    if (!redirected) {
+        if (const wchar_t* r = vfs_redirect::tryResolveDevPathW(lpFileName, devNormBuf, &redirectedByDevSave)) {
+            lpFileName = r;
         }
     }
 
@@ -364,7 +373,9 @@ HANDLE WINAPI detourCreateFileW(LPCWSTR               lpFileName,
         }
     }
 
-    const std::wstring saveDir = extractSaveDir(pathView);
+    const std::wstring saveDir = redirectedByDevSave
+        ? std::filesystem::path(pathView).parent_path().wstring()
+        : extractSaveDir(pathView);
     if (saveDir.empty()) {
         return h;
     }

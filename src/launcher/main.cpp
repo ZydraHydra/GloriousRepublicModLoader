@@ -34,6 +34,7 @@
 #include "common/pe_scanner.hpp"
 #include "common/ui_schema.hpp"
 #include "common/vfs_index.hpp"
+#include "embedded_grml_ini.hpp"
 #include "embedded_grml_offsets.hpp"
 #include "launcher/http_server.hpp"
 #include "launcher/injector.hpp"
@@ -115,8 +116,10 @@ std::string serializeGrmlIniJson(const grml::IniFile& cfg)
 std::string buildDiscoverJsonStr(const std::filesystem::path& loaderDir, const std::filesystem::path& gameOverride)
 {
     const std::filesystem::path dataDir = grml::getAppDataDir(loaderDir);
+    const std::filesystem::path grmlIniPath = dataDir / L"grml.ini";
+    grml::syncDefaultIniKeys(grmlIniPath, grml::generated::kEmbeddedDefaultGrmlIni);
     grml::IniFile cfg;
-    cfg.loadFromFile(dataDir / L"grml.ini");
+    cfg.loadFromFile(grmlIniPath);
 
     const std::filesystem::path cfgGame =
         !gameOverride.empty() ? gameOverride : std::filesystem::path(grml::utf8ToWide(cfg.getString("general", "game_path", "")));
@@ -154,7 +157,7 @@ std::string buildDiscoverJsonStr(const std::filesystem::path& loaderDir, const s
     }
 
     // Collect offset definitions & resolve via grml_session.json (live runtime) or PE cache/.text scan
-    const auto offsetDefs = grml::offsets::collectOffsetDefinitions(offsets);
+    const auto offsetDefs = grml::offsets::collectOffsetDefinitions(offsets, gameVer == "unknown" ? std::string_view{} : gameVer);
     std::vector<grml::offsets::ResolvedOffsetEntry> resolvedOffsets;
     bool loadedFromSession = false;
     {
@@ -278,8 +281,10 @@ std::string buildDiscoverJsonStr(const std::filesystem::path& loaderDir, const s
     }
 
     // Build Asset Overrides (Media VFS) index using the exact same C++ engine
+    const grml::EffectiveGamePaths effPaths = grml::resolveEffectiveGamePaths(gameExe, cfg);
     auto& vfs = grml::vfs::VfsIndex::get();
-    vfs.build(dataDir, gameExe.empty() ? std::filesystem::path{} : gameExe.parent_path(), true);
+    vfs.build(dataDir, gameExe.empty() ? std::filesystem::path{} : gameExe.parent_path(), true,
+              effPaths.workshopRoot, effPaths.overridesRoot);
 
     std::string out;
     out.reserve(65536);
@@ -328,6 +333,19 @@ std::string buildDiscoverJsonStr(const std::filesystem::path& loaderDir, const s
         out += std::string("}") + ((i + 1 < resolvedOffsets.size()) ? ",\n" : "\n");
     }
     out += "  ],\n";
+    const grml::SteamDefaultPaths steamDefs = grml::discoverSteamDefaultPaths();
+    wchar_t devEnvBuf[16]{};
+    const DWORD devEnvLen = GetEnvironmentVariableW(L"GRML_DEV", devEnvBuf, _countof(devEnvBuf));
+    const bool showDevSettings =
+        (devEnvLen > 0 && (std::wcscmp(devEnvBuf, L"1") == 0 || _wcsicmp(devEnvBuf, L"true") == 0)) ||
+        cfg.getBool("general", "show_dev_settings", false);
+    out += std::string("  \"showDevSettings\": ") + (showDevSettings ? "true" : "false") + ",\n";
+    out += "  \"steamDefaults\": {\n";
+    out += "    \"saveRoot\": \"" + jsonEsc(grml::wideToUtf8(steamDefs.saveRoot.wstring())) + "\",\n";
+    out += "    \"workshopRoot\": \"" + jsonEsc(grml::wideToUtf8(steamDefs.workshopRoot.wstring())) + "\",\n";
+    out += "    \"workshopWipRoot\": \"" + jsonEsc(grml::wideToUtf8(steamDefs.workshopWipRoot.wstring())) + "\",\n";
+    out += "    \"overridesRoot\": \"" + jsonEsc(grml::wideToUtf8(steamDefs.overridesRoot.wstring())) + "\"\n";
+    out += "  },\n";
     out += "  \"warnings\": " + jsonStrArray(topoWarn) + ",\n";
     out += "  \"grmlIni\": " + serializeGrmlIniJson(cfg) + ",\n";
     out += "  \"vfs\": " + vfs.serializeJson() + ",\n";
@@ -971,9 +989,10 @@ std::string buildInspectSavesJsonStr(const std::filesystem::path& loaderDir, con
     }
     outOk = true;
 
+    const grml::EffectiveGamePaths effPaths = grml::resolveEffectiveGamePaths(gameExe, cfg);
     const std::filesystem::path gameDir      = gameExe.parent_path();
-    const std::filesystem::path saveRoot     = gameDir / L"media_soviet" / L"save";
-    const std::filesystem::path workshopRoot = gameDir.parent_path().parent_path() / L"workshop" / L"content" / L"784150";
+    const std::filesystem::path saveRoot     = effPaths.saveRoot;
+    const std::filesystem::path workshopRoot = effPaths.workshopRoot;
 
     struct InstalledWorkshopInfo {
         std::string itemType;
@@ -990,8 +1009,9 @@ std::string buildInspectSavesJsonStr(const std::filesystem::path& loaderDir, con
         }
     }
     const std::filesystem::path extraRoots[] = {
-        gameDir / L"media_soviet" / L"workshop_wip",
+        effPaths.workshopWipRoot,
         loaderDir / L"overrides",
+        effPaths.overridesRoot,
         gameDir / L"override",
     };
     for (const auto& er : extraRoots) {
@@ -1485,7 +1505,20 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     const std::filesystem::path loaderDir = getExeDir();
 
-    if (argc <= 1) {
+    bool hasDevFlag = false;
+    bool onlyGuiFlags = true;
+    for (int i = 1; i < argc; ++i) {
+        if (std::wcscmp(argv[i], L"--dev") == 0) {
+            hasDevFlag = true;
+        } else {
+            onlyGuiFlags = false;
+        }
+    }
+    if (hasDevFlag) {
+        SetEnvironmentVariableW(L"GRML_DEV", L"1");
+    }
+
+    if (argc <= 1 || onlyGuiFlags) {
         uint16_t port = 0;
         if (!grml::http_server::start(loaderDir, port)) {
             MessageBoxW(nullptr, L"Failed to start GRML local HTTP server.", L"GRML Error", MB_OK | MB_ICONERROR);

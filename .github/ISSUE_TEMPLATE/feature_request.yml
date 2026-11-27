@@ -1,0 +1,34 @@
+name: Feature Request
+description: Suggest an improvement, launcher QoL feature, or SDK enhancement for GRML.
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Target Area
+      options:
+        - Launcher UI / Playlists / Settings
+        - In-Game F9 Overlay
+        - Asset Overrides (Media VFS)
+        - Save Inspector / CrashGuard
+        - Plugin SDK (grml_api.h) / Declarative UI
+        - Localization / Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / Use Case
+      description: What are you trying to achieve in GRML or WRSR modding, and what limitation are you hitting today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: Describe how you'd expect it to behave (UI controls, INI options, ABI functions, etc.).
+    validations:
+      required: true

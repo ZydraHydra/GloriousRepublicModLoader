@@ -12,13 +12,8 @@ function(grml_embed_offsets target_name ini_path)
     endif()
 
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${ini_path}")
-    file(READ "${ini_path}" _offsets_raw)
-
-    set(_delim "GRMLOFFSETS")
-    string(FIND "${_offsets_raw}" ")${_delim}\"" _has_collision)
-    if(NOT _has_collision EQUAL -1)
-        message(FATAL_ERROR "grml_embed_offsets: ${ini_path} contains forbidden delimiter ')${_delim}\"'")
-    endif()
+    file(READ "${ini_path}" _offsets_hex HEX)
+    string(REGEX REPLACE "([0-9a-f][0-9a-f])" "static_cast<char>(0x\\1)," _offsets_bytes "${_offsets_hex}")
 
     set(_gen_dir "${CMAKE_CURRENT_BINARY_DIR}/generated")
     set(_out_hdr "${_gen_dir}/${EMBED_HEADER_NAME}")
@@ -28,9 +23,11 @@ function(grml_embed_offsets target_name ini_path)
 "#pragma once
 // Auto-generated from ${ini_path} — do not edit manually.
 namespace grml::generated {
-inline constexpr const char* ${EMBED_SYMBOL_NAME} = R\"${_delim}(
-${_offsets_raw}
-)${_delim}\";
+inline constexpr char ${EMBED_SYMBOL_NAME}Data[] = {
+${_offsets_bytes}
+static_cast<char>(0x00)
+};
+inline constexpr const char* ${EMBED_SYMBOL_NAME} = ${EMBED_SYMBOL_NAME}Data;
 } // namespace grml::generated
 ")
     file(WRITE "${_out_hdr}.tmp" "${_hdr_text}")

@@ -226,21 +226,41 @@ bool loadMergedOffsetsIni(const std::filesystem::path& loaderDir,
     return !outIni.sectionOrder().empty();
 }
 
-std::vector<OffsetDefinition> collectOffsetDefinitions(const IniFile& ini)
+std::vector<OffsetDefinition> collectOffsetDefinitions(const IniFile& ini,
+                                                       std::string_view buildVersion)
 {
     std::vector<OffsetDefinition> defs;
+    std::vector<std::string> verSuffixes;
+    if (!buildVersion.empty()) {
+        std::string cur(buildVersion);
+        while (!cur.empty()) {
+            verSuffixes.push_back("." + cur);
+            const size_t dot = cur.rfind('.');
+            if (dot == std::string::npos) break;
+            cur.resize(dot);
+        }
+    }
+
+    auto getVerStr = [&](const std::string& sec, const char* key, const std::string& defVal) -> std::string {
+        for (const auto& sfx : verSuffixes) {
+            const std::string v = ini.getString(sec, std::string(key) + sfx, "");
+            if (!v.empty()) return v;
+        }
+        return ini.getString(sec, key, defVal);
+    };
+
     for (const auto& sec : ini.sectionOrder()) {
         if (isReservedSection(sec)) continue;
-        const std::string pat = ini.getString(sec, "pattern", "");
+        const std::string pat = getVerStr(sec, "pattern", "");
         if (pat.empty()) continue;
 
         OffsetDefinition def;
         def.name          = sec;
         def.pattern       = pat;
-        def.resolveMode   = parseResolveMode(ini.getString(sec, "resolve", "function_start"));
-        def.opOffset      = static_cast<int32_t>(parseI64Auto(ini.getString(sec, "op_offset", "0"), 0));
-        def.instrLen      = static_cast<int32_t>(parseI64Auto(ini.getString(sec, "instr_len", "0"), 0));
-        def.extraOffset   = parseI64Auto(ini.getString(sec, "extra_offset", "0"), 0);
+        def.resolveMode   = parseResolveMode(getVerStr(sec, "resolve", "function_start"));
+        def.opOffset      = static_cast<int32_t>(parseI64Auto(getVerStr(sec, "op_offset", "0"), 0));
+        def.instrLen      = static_cast<int32_t>(parseI64Auto(getVerStr(sec, "instr_len", "0"), 0));
+        def.extraOffset   = parseI64Auto(getVerStr(sec, "extra_offset", "0"), 0);
         def.category      = ini.getString(sec, "category", "General");
         if (def.category.empty()) def.category = "General";
         def.anchorXref    = ini.getString(sec, "anchor_xref", "");

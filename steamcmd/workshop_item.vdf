@@ -1,0 +1,46 @@
+"workshopitem"
+{
+    "appid"           "784150"
+    "publishedfileid" "{PUBLISHED_FILE_ID}"
+    "contentfolder"   "{CONTENT_DIR}"
+    "previewfile"     "{PREVIEW_FILE}"
+    "visibility"      "{VISIBILITY}"
+    "title"           "{WORKSHOP_TITLE}"
+    "description"     "[h1]Hello, Comrade![/h1]Tired of manually editing `.ini` files, guessing why a save crashed, or losing your mod configs every time a loader updates?
+
+[b]Glorious Republic Mod Loader (GRML)[/b] is a fast, modern, self-contained mod loader, [b]F9[/b] in-game settings hub, non-destructive asset override manager (Media VFS), and Save Inspector for [b]Workers & Resources: Soviet Republic[/b] ([i]SOVIET64.exe 1.2.0.9+[/i]).
+
+[b]Version:[/b] v{VERSION} (Alpha) | [b]Source & Releases:[/b] [url=https://github.com/ZydraHydra/GloriousRepublicModLoader]GitHub Repository[/url]
+
+[b]Alpha Field Dispatch:[/b] Treat this release as an early [b]Alpha[/b]. While tested on WRSR 1.2.0.9, native memory hooks and VFS overrides benefit from wider testing across different hardware, mod lists, and large late-game republics. Back up your saves first and report any issues on [url=https://github.com/ZydraHydra/GloriousRepublicModLoader/issues]GitHub Issues[/url]!
+
+[h1]How to Launch (Step-by-Step)[/h1]Because GRML is a standalone Windows x64 launcher (`GloriousRepublicModLoader.exe`) + native runtime (`grml_runtime.dll`), simply clicking Play in Steam will [b]not[/b] start it automatically.
+
+[list=1]
+[*] Subscribe to [b]Glorious Republic Mod Loader (GRML)[/b] here on Steam Workshop.
+[*] Open the Workshop folder in your Steam Library:
+[code]<Your Steam Library>\steamapps\workshop\content\784150\{PUBLISHED_FILE_ID}\[/code]
+[*] Run [b]GloriousRepublicModLoader.exe[/b] (Tip: create a Desktop shortcut or add it to Steam as a Non-Steam Game).
+[*] Enable the mods & asset overrides you want, then click [b]Launch WRSR[/b] (or [b]Continue <SaveName>[/b] to boot straight into your latest save).
+[*] Press [b]F9[/b] in-game to open [b]GRML Mod Settings[/b]!
+[/list]
+All your settings, playlists, mod `.ini` configs, and logs are stored safely in [code]%LOCALAPPDATA%\GRML[/code], so Workshop updates never overwrite your configuration.
+
+[h1]100% Backwards Compatible[/h1][list]
+[*] Discovers subscribed [b]Steam Workshop (784150)[/b] mods, local `plugins/`, and `workshop_wip/` mods automatically (newly discovered mods start disabled by default).
+[*] Supports [b]*.grml.json[/b], legacy [b]*.rml.json[/b], and manifestless native DLLs.
+[*] Preserves [b]RML API v1[/b], [b]TesmioLoader API v3/v4[/b], and `Local\WRSR_ModOverlay_<PID>` docking.
+[*] Auto-generates structured settings UIs even for legacy mods that only ship a raw `.ini` file!
+[/list]
+
+[h1]Key Features for Players[/h1][list]
+[*] [b]Modern Launcher & Playlists:[/b] Filter mods by name, Workshop ID, ABI, or supported game version, check dependencies/conflicts, and switch mod setups in one click with saved Playlists.
+[*] [b]Visual Mod Settings (Launcher + In-Game F9):[/b] Sliders, toggles, dropdowns, and tooltips in both the launcher and the matching [b]F9[/b] in-game overlay.
+[*] [b]Non-Destructive Asset Overrides (Media VFS):[/b] Layer `media_soviet\` / `override\` folders or `.zip` packs with priority ordering and conflict inspection without touching original game files.
+[*] [b]Direct-to-Save Launch & Intro Skip:[/b] Boot straight into your latest or chosen save with anti-crash-loop protection, and skip the 9.5s intro logo timer while indexing runs in the background.
+[*] [b]Save Inspector & CrashGuard:[/b] Inspect save dates, map templates, and missing Workshop IDs (with one-click copy & Steam links), plus live `grml.log` diagnostics and Windows crash attribution.
+[*] [b]Offsets & Pre-Flight Compatibility:[/b] Live `OK` / `CACHED` / `MISSING` signature status across 6 categories, pre-flight mod compatibility checks, and one-click OTA offset updates from GitHub.
+[/list]{CHANGELOG_SECTION}"
+    "language"        "english"
+    "changenote"      "{CHANGENOTE}"
+}

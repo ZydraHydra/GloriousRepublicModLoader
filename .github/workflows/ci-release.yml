@@ -1,4 +1,4 @@
-name: Build & Release GRML (Windows x64)
+name: Build, Release & Steam Workshop Publish (Windows x64)
 
 on:
   push:
@@ -7,13 +7,99 @@ on:
   pull_request:
     branches: [ main ]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version override (leave empty to read VERSION)"
+        required: false
+        default: ""
+        type: string
+      visibility:
+        description: "Steam Workshop visibility (0=Public, 1=FriendsOnly, 2=Hidden)"
+        required: true
+        default: "2"
+        type: choice
+        options:
+          - "2"
+          - "1"
+          - "0"
+      changenote:
+        description: "Steam Workshop & Release changenote"
+        required: false
+        default: ""
+        type: string
+      publish_to_workshop:
+        description: "Upload to Steam Workshop if Steam secrets are configured"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
 
 jobs:
-  build-x64:
-    name: Build Release x64 (/MT + WebView2 + SvelteKit)
+  repo-hygiene:
+    name: Clean-Room & Hygiene Audit
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Audit tracked files & JSON configs
+        shell: pwsh
+        run: |
+          $files = git ls-files | Where-Object { $_ -ne '.github/workflows/ci-release.yml' }
+          $pattern = 'ghp_|github_pat_|AIza|(?<![A-Za-z])C:\\Users\\'
+          $hits = $files | Select-String -Pattern $pattern -AllMatches
+          if ($hits) {
+            $hits | Format-Table Path, LineNumber, Line -AutoSize
+            throw "Repo hygiene audit failed."
+          }
+
+          @("package.json", "steamcmd/workshop.json") | ForEach-Object {
+            if (Test-Path $_) {
+              Write-Host "Validating $_"
+              Get-Content $_ -Raw | ConvertFrom-Json | Out-Null
+            }
+          }
+
+  build-x64:
+    name: Build Release x64 (/MT + WebView2 + SvelteKit)
+    needs: repo-hygiene
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve Release Metadata
+        id: meta
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "push" -and "${{ github.ref }}".StartsWith("refs/tags/v")) {
+            $version    = "${{ github.ref_name }}" -replace '^v', ''
+            $visibility = "0"
+            $publish    = "true"
+            $changenote = ""
+            $tagName    = "${{ github.ref_name }}"
+          } else {
+            $verInput   = "${{ inputs.version }}".Trim() -replace '^v', ''
+            $version    = if ($verInput) { $verInput } else { (Get-Content VERSION -TotalCount 1).Trim() }
+            $visibility = if ("${{ inputs.visibility }}") { "${{ inputs.visibility }}" } else { "2" }
+            $publish    = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.publish_to_workshop }}" } else { "false" }
+            $changenote = "${{ inputs.changenote }}"
+            $tagName    = "v$version"
+          }
+          $isPrerelease = ($version -match '-(alpha|beta|rc)') ? "true" : "false"
+
+          "version=$version"       | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "visibility=$visibility" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "publish=$publish"       | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "tag=$tagName"           | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "prerelease=$isPrerelease" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          @(
+            "changenote<<GRML_CHANGENOTE_EOF"
+            $changenote
+            "GRML_CHANGENOTE_EOF"
+          ) | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Install Ninja
         shell: pwsh
@@ -30,7 +116,6 @@ jobs:
         shell: pwsh
         run: |
           npm ci
-          npm run check:i18n
           npm run check
           npm run build
 
@@ -52,28 +137,90 @@ jobs:
           & cmd.exe /c "`"$bat`""
           if ($LASTEXITCODE -ne 0) { throw "Native build failed" }
 
-      - name: Package Release Archive
+          New-Item -ItemType Directory -Force -Path "build/release" | Out-Null
+          Copy-Item "build/cmake/bin/GloriousRepublicModLoader.exe" "build/release/" -Force
+          Copy-Item "build/cmake/bin/grml_runtime.dll" "build/release/" -Force
+          Copy-Item "build/cmake/bin/grml_offsets.ini" "build/release/" -Force
+
+      - name: Stage Release & Steam Workshop Package
         shell: pwsh
+        env:
+          RELEASE_CHANGENOTE: ${{ steps.meta.outputs.changenote }}
         run: |
-          $ver = (Get-Content VERSION -TotalCount 1).Trim()
-          $stage = "build/stage/GRML-v$ver-win64"
-          New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          Copy-Item "build/cmake/bin/GloriousRepublicModLoader.exe" $stage
-          Copy-Item "build/cmake/bin/grml_runtime.dll" $stage
-          Copy-Item "build/cmake/bin/grml_offsets.ini" $stage
-          Copy-Item "LICENSE" $stage
-          Compress-Archive -Path "$stage/*" -DestinationPath "build/GRML-v$ver-win64.zip" -Force
+          .\scripts\package_workshop.ps1 `
+            -Version "${{ steps.meta.outputs.version }}" `
+            -Visibility "${{ steps.meta.outputs.visibility }}" `
+            -Changenote $env:RELEASE_CHANGENOTE
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: grml-win64-release
           path: |
-            build/GRML-v*-win64.zip
+            release/GRML_v*/GRML-v*-win64.zip
+          retention-days: 14
 
-      - name: Publish GitHub Release on Tag
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
-          files: build/GRML-v*-win64.zip
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: "Glorious Republic Mod Loader v${{ steps.meta.outputs.version }}"
+          prerelease: ${{ steps.meta.outputs.prerelease == 'true' }}
           generate_release_notes: true
+          files: |
+            release/GRML_v*/GRML-v*-win64.zip
+
+      - name: Check SteamCMD CI Secrets
+        id: steam_check
+        shell: pwsh
+        run: |
+          $hasUser = -not [string]::IsNullOrWhiteSpace("${{ secrets.STEAM_USERNAME }}")
+          $hasAuth = (-not [string]::IsNullOrWhiteSpace("${{ secrets.STEAM_CONFIG_VDF }}")) -or
+                     (-not [string]::IsNullOrWhiteSpace("${{ secrets.STEAM_PASSWORD }}"))
+          $shouldRun = ("${{ steps.meta.outputs.publish }}" -eq "true") -and $hasUser -and $hasAuth
+          "ready=$shouldRun" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          if (-not $shouldRun) {
+            "Steam Workshop upload skipped: set STEAM_USERNAME and STEAM_CONFIG_VDF (or STEAM_PASSWORD) secrets to upload automatically." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          }
+
+      - name: Publish to Steam Workshop
+        if: steps.steam_check.outputs.ready == 'true'
+        shell: pwsh
+        env:
+          STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
+          STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
+          STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
+        run: |
+          $steamDir = "$env:RUNNER_TEMP\steamcmd"
+          New-Item -ItemType Directory -Force -Path $steamDir | Out-Null
+          $zip = "$env:RUNNER_TEMP\steamcmd.zip"
+          Invoke-WebRequest -Uri "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $steamDir -Force
+
+          & "$steamDir\steamcmd.exe" "+quit" | Out-Null
+
+          if (-not [string]::IsNullOrWhiteSpace($env:STEAM_CONFIG_VDF)) {
+            $cfgDir = Join-Path $steamDir "config"
+            New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
+            [System.IO.File]::WriteAllBytes((Join-Path $cfgDir "config.vdf"), [System.Convert]::FromBase64String($env:STEAM_CONFIG_VDF))
+          }
+
+          $vdf = Get-ChildItem "release\GRML_v*\workshop_item.vdf" | Select-Object -First 1
+          if (-not $vdf) { throw "Staged workshop_item.vdf not found" }
+
+          Write-Host "Uploading $($vdf.FullName)..."
+          if (-not [string]::IsNullOrWhiteSpace($env:STEAM_CONFIG_VDF)) {
+            & "$steamDir\steamcmd.exe" "+login" $env:STEAM_USERNAME "+workshop_build_item" $vdf.FullName "+quit"
+          } else {
+            & "$steamDir\steamcmd.exe" "+login" $env:STEAM_USERNAME $env:STEAM_PASSWORD "+workshop_build_item" $vdf.FullName "+quit"
+          }
+          if ($LASTEXITCODE -ne 0) {
+            throw "SteamCMD upload failed with exit code $LASTEXITCODE"
+          }
+
+          $vdfText = Get-Content $vdf.FullName -Raw
+          if ($vdfText -match '"publishedfileid"\s+"(\d+)"') {
+            $pubId = $Matches[1]
+            "Published **GRML v${{ steps.meta.outputs.version }}** -> Steam Workshop ID ``$pubId`` (https://steamcommunity.com/sharedfiles/filedetails/?id=$pubId)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          }

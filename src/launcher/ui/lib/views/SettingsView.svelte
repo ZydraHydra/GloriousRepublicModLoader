@@ -2,7 +2,7 @@
 	import { app } from '$lib/stores/app.svelte';
 	import { i18n, t } from '$lib/i18n/index.svelte';
 	import { openExternalUrl } from '$lib/utils';
-	import { Badge, Button, PanelCard, Select, TextInput, ToggleSwitch } from '$lib/components/ui';
+	import { Badge, Button, PanelCard, SectionHeader, Select, TextInput, ToggleSwitch } from '$lib/components/ui';
 
 	let listeningHotkey = $state(false);
 
@@ -111,6 +111,56 @@
 		await app.saveGrmlIni();
 		await app.fetchState();
 	}
+
+	async function onDevPathsChange() {
+		app.savesData = null;
+		await app.saveGrmlIni();
+		await app.fetchState();
+		await app.fetchSaves();
+	}
+
+	async function onDevModeToggle() {
+		if (app.chkDevMode) {
+			const sd = app.discovery?.steamDefaults;
+			if (sd) {
+				if (!app.devSavePath.trim() && sd.saveRoot) app.devSavePath = sd.saveRoot;
+				if (!app.devWorkshopPath.trim() && sd.workshopRoot) app.devWorkshopPath = sd.workshopRoot;
+				if (!app.devWorkshopWipPath.trim() && sd.workshopWipRoot) app.devWorkshopWipPath = sd.workshopWipRoot;
+				if (!app.devOverridesPath.trim() && sd.overridesRoot) app.devOverridesPath = sd.overridesRoot;
+			}
+		}
+		await onDevPathsChange();
+	}
+
+	async function fillSteamDefaults() {
+		const sd = app.discovery?.steamDefaults;
+		if (!sd) return;
+		if (sd.saveRoot) app.devSavePath = sd.saveRoot;
+		if (sd.workshopRoot) app.devWorkshopPath = sd.workshopRoot;
+		if (sd.workshopWipRoot) app.devWorkshopWipPath = sd.workshopWipRoot;
+		if (sd.overridesRoot) app.devOverridesPath = sd.overridesRoot;
+		await onDevPathsChange();
+	}
+
+	async function browseDevFolder(field: 'save' | 'workshop' | 'wip' | 'overrides') {
+		const current =
+			field === 'save'
+				? app.devSavePath
+				: field === 'workshop'
+					? app.devWorkshopPath
+					: field === 'wip'
+						? app.devWorkshopWipPath
+						: app.devOverridesPath;
+		const resp = await fetch(`/api/browse-folder?current=${encodeURIComponent(current.trim())}`);
+		const data = await resp.json();
+		if (data.ok && data.path) {
+			if (field === 'save') app.devSavePath = data.path;
+			else if (field === 'workshop') app.devWorkshopPath = data.path;
+			else if (field === 'wip') app.devWorkshopWipPath = data.path;
+			else app.devOverridesPath = data.path;
+			await onDevPathsChange();
+		}
+	}
 </script>
 
 <div class="panel">
@@ -120,6 +170,45 @@
 	</p>
 
 	<div class="schema-form">
+		<SectionHeader title={t('settings.sectionLauncher')} />
+
+		<PanelCard>
+			<div class="control-top">
+				<div class="control-label">
+					{t('settings.updatesLabel')}
+					{#if app.discovery?.loaderVersion}
+						<span class="muted" style="font-weight:400;margin-left:6px;">v{app.discovery.loaderVersion}</span>
+					{/if}
+				</div>
+				<div style="display:flex;align-items:center;gap:8px;">
+					{#if app.updateInfo?.ok}
+						{#if app.updateInfo.updateAvailable}
+							<Badge variant="grml">{t('settings.updateBadge', { version: app.updateInfo.latestVersion ?? '' })}</Badge>
+							{#if app.updateInfo.releaseUrl}
+								<Button
+									variant="primary"
+									size="sm"
+									onclick={() => openExternalUrl(app.updateInfo!.releaseUrl!)}
+								>
+									{t('settings.downloadBtn')}
+								</Button>
+							{/if}
+						{:else}
+							<Badge variant="ready">{t('settings.upToDateBadge')}</Badge>
+						{/if}
+					{:else if app.updateInfo && !app.updateInfo.ok}
+						<Badge variant="warn">{app.updateInfo.error || t('settings.checkFailedBadge')}</Badge>
+					{/if}
+					<Button size="sm" disabled={app.checkingUpdate} onclick={() => app.checkForUpdates(true)}>
+						{app.checkingUpdate ? t('common.checking') : t('settings.checkUpdatesBtn')}
+					</Button>
+				</div>
+			</div>
+			<div class="control-tip">
+				{@html t('settings.updatesTip')}
+			</div>
+		</PanelCard>
+
 		<PanelCard>
 			<div class="control-top">
 				<div class="control-label">{t('settings.languageLabel')}</div>
@@ -133,6 +222,8 @@
 				{@html t('settings.languageTip')}
 			</div>
 		</PanelCard>
+
+		<SectionHeader title={t('settings.sectionGameDiscovery')} />
 
 		<PanelCard>
 			<div class="control-top">
@@ -183,6 +274,8 @@
 			</div>
 		</PanelCard>
 
+		<SectionHeader title={t('settings.sectionInGame')} />
+
 		<PanelCard>
 			<div class="control-top">
 				<div class="control-label">{t('settings.hotkeyLabel')}</div>
@@ -226,6 +319,8 @@
 			</div>
 		</PanelCard>
 
+		<SectionHeader title={t('settings.sectionDeveloper')} />
+
 		<PanelCard>
 			<div class="control-top">
 				<div class="control-label">
@@ -254,41 +349,117 @@
 			</div>
 		</PanelCard>
 
+		{#if app.discovery?.showDevSettings}
 		<PanelCard>
 			<div class="control-top">
 				<div class="control-label">
-					{t('settings.updatesLabel')}
-					{#if app.discovery?.loaderVersion}
-						<span class="muted" style="font-weight:400;margin-left:6px;">v{app.discovery.loaderVersion}</span>
+					{t('settings.devModeLabel')}
+					{#if app.chkDevMode}
+						<Badge variant="grml">{t('settings.devModeActiveBadge')}</Badge>
 					{/if}
 				</div>
-				<div style="display:flex;align-items:center;gap:8px;">
-					{#if app.updateInfo?.ok}
-						{#if app.updateInfo.updateAvailable}
-							<Badge variant="grml">{t('settings.updateBadge', { version: app.updateInfo.latestVersion ?? '' })}</Badge>
-							{#if app.updateInfo.releaseUrl}
-								<Button
-									variant="primary"
-									size="sm"
-									onclick={() => openExternalUrl(app.updateInfo!.releaseUrl!)}
-								>
-									{t('settings.downloadBtn')}
-								</Button>
-							{/if}
-						{:else}
-							<Badge variant="ready">{t('settings.upToDateBadge')}</Badge>
-						{/if}
-					{:else if app.updateInfo && !app.updateInfo.ok}
-						<Badge variant="warn">{app.updateInfo.error || t('settings.checkFailedBadge')}</Badge>
-					{/if}
-					<Button size="sm" disabled={app.checkingUpdate} onclick={() => app.checkForUpdates(true)}>
-						{app.checkingUpdate ? t('common.checking') : t('settings.checkUpdatesBtn')}
-					</Button>
-				</div>
+				<ToggleSwitch bind:checked={app.chkDevMode} onchange={onDevModeToggle} />
 			</div>
 			<div class="control-tip">
-				{@html t('settings.updatesTip')}
+				{@html t('settings.devModeTip')}
 			</div>
+			{#if app.chkDevMode}
+				<div class="dev-paths-grid">
+					<div class="dev-path-field" class:dev-path-inactive={!app.chkDevSave}>
+						<div class="dev-path-header">
+							<div class="control-tip" style="margin:0;">{@html t('settings.devSavePathLabel')}</div>
+							<ToggleSwitch bind:checked={app.chkDevSave} onchange={onDevPathsChange} />
+						</div>
+						<div class="control-input-row">
+							<TextInput
+								bind:value={app.devSavePath}
+								mono={true}
+								disabled={!app.chkDevSave}
+								placeholder={app.discovery?.steamDefaults?.saveRoot || t('settings.devPathPlaceholder')}
+								onchange={onDevPathsChange}
+							/>
+							<Button size="sm" disabled={!app.chkDevSave} onclick={() => browseDevFolder('save')}>{t('settings.browseBtn')}</Button>
+						</div>
+					</div>
+					<div class="dev-path-field" class:dev-path-inactive={!app.chkDevWorkshop}>
+						<div class="dev-path-header">
+							<div class="control-tip" style="margin:0;">{@html t('settings.devWorkshopPathLabel')}</div>
+							<ToggleSwitch bind:checked={app.chkDevWorkshop} onchange={onDevPathsChange} />
+						</div>
+						<div class="control-input-row">
+							<TextInput
+								bind:value={app.devWorkshopPath}
+								mono={true}
+								disabled={!app.chkDevWorkshop}
+								placeholder={app.discovery?.steamDefaults?.workshopRoot || t('settings.devPathPlaceholder')}
+								onchange={onDevPathsChange}
+							/>
+							<Button size="sm" disabled={!app.chkDevWorkshop} onclick={() => browseDevFolder('workshop')}>{t('settings.browseBtn')}</Button>
+						</div>
+					</div>
+					<div class="dev-path-field" class:dev-path-inactive={!app.chkDevWip}>
+						<div class="dev-path-header">
+							<div class="control-tip" style="margin:0;">{@html t('settings.devWipPathLabel')}</div>
+							<ToggleSwitch bind:checked={app.chkDevWip} onchange={onDevPathsChange} />
+						</div>
+						<div class="control-input-row">
+							<TextInput
+								bind:value={app.devWorkshopWipPath}
+								mono={true}
+								disabled={!app.chkDevWip}
+								placeholder={app.discovery?.steamDefaults?.workshopWipRoot || t('settings.devPathPlaceholder')}
+								onchange={onDevPathsChange}
+							/>
+							<Button size="sm" disabled={!app.chkDevWip} onclick={() => browseDevFolder('wip')}>{t('settings.browseBtn')}</Button>
+						</div>
+					</div>
+					<div class="dev-path-field" class:dev-path-inactive={!app.chkDevOverrides}>
+						<div class="dev-path-header">
+							<div class="control-tip" style="margin:0;">{@html t('settings.devOverridesPathLabel')}</div>
+							<ToggleSwitch bind:checked={app.chkDevOverrides} onchange={onDevPathsChange} />
+						</div>
+						<div class="control-input-row">
+							<TextInput
+								bind:value={app.devOverridesPath}
+								mono={true}
+								disabled={!app.chkDevOverrides}
+								placeholder={app.discovery?.steamDefaults?.overridesRoot || t('settings.devPathPlaceholder')}
+								onchange={onDevPathsChange}
+							/>
+							<Button size="sm" disabled={!app.chkDevOverrides} onclick={() => browseDevFolder('overrides')}>{t('settings.browseBtn')}</Button>
+						</div>
+					</div>
+					<div style="display:flex;justify-content:flex-end;">
+						<Button size="sm" onclick={fillSteamDefaults}>{t('settings.fillSteamDefaultsBtn')}</Button>
+					</div>
+				</div>
+			{/if}
 		</PanelCard>
+		{/if}
 	</div>
 </div>
+
+<style>
+	.dev-paths-grid {
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+		margin-top: 12px;
+		padding-top: 10px;
+		border-top: 1px solid rgba(255, 255, 255, 0.08);
+	}
+	.dev-path-field {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+	.dev-path-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 10px;
+	}
+	.dev-path-inactive {
+		opacity: 0.6;
+	}
+</style>

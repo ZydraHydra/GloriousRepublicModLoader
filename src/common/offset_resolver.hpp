@@ -63,7 +63,10 @@ bool loadMergedOffsetsIni(const std::filesystem::path& loaderDir,
                           uint64_t& outHash);
 
 // Collects all declarative offset sections (sections containing `pattern`).
-std::vector<OffsetDefinition> collectOffsetDefinitions(const IniFile& ini);
+// Collects all declarative offset definitions (sections with a `pattern` key),
+// preferring `<key>.<buildVersion>` overrides when `buildVersion` is provided.
+std::vector<OffsetDefinition> collectOffsetDefinitions(const IniFile& ini,
+                                                       std::string_view buildVersion = {});
 
 // Applies `resolve` rule (function_start, rip_rel32, call_rel32, disp32)
 // with bounds checks against `pe`.

@@ -83,9 +83,28 @@ void* resolveRipRelativeDisp32(void* site, uint32_t dispOff, uint32_t nextIpOff)
 bool lookupRuntimeFunctionRva(const PeModuleInfo& pe, uint32_t rva, uint32_t& outBegin, uint32_t& outEnd) noexcept;
 
 // Steam / WRSR wide-path discovery helpers (app 784150)
+class IniFile;
+struct EffectiveGamePaths {
+    bool devMode{false};
+    std::filesystem::path saveRoot;
+    std::filesystem::path workshopRoot;
+    std::filesystem::path workshopWipRoot;
+    std::filesystem::path overridesRoot;
+};
+
+struct SteamDefaultPaths {
+    std::filesystem::path saveRoot;
+    std::filesystem::path workshopRoot;
+    std::filesystem::path workshopWipRoot;
+    std::filesystem::path overridesRoot;
+};
+
 std::vector<std::filesystem::path> discoverSteamLibraries();
 std::filesystem::path discoverWrsrGameExe(const std::filesystem::path& baseDir,
                                           const std::filesystem::path& configuredPath);
 std::filesystem::path workshopRootFromGameExe(const std::filesystem::path& gameExe);
+SteamDefaultPaths discoverSteamDefaultPaths();
+EffectiveGamePaths resolveEffectiveGamePaths(const std::filesystem::path& gameExeOrDir,
+                                             const IniFile& grmlConfig);
 
 } // namespace grml

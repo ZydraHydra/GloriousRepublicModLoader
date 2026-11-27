@@ -178,6 +178,10 @@ grml_embed_offsets(grml_injector "${CMAKE_CURRENT_SOURCE_DIR}/config/grml_offset
     HEADER_NAME "embedded_grml_offsets.hpp"
     SYMBOL_NAME "kEmbeddedGrmlOffsetsIni"
 )
+grml_embed_offsets(grml_injector "${CMAKE_CURRENT_SOURCE_DIR}/config/grml.ini"
+    HEADER_NAME "embedded_grml_ini.hpp"
+    SYMBOL_NAME "kEmbeddedDefaultGrmlIni"
+)
 target_include_directories(grml_injector PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/src"

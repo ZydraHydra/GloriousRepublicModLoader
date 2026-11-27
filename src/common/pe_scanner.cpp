@@ -1,5 +1,6 @@
 #include "common/pe_scanner.hpp"
 #include "common/ini_util.hpp"
+#include "common/ini_util.hpp"
 
 #include <windows.h>
 #include <bcrypt.h>
@@ -523,17 +524,112 @@ std::filesystem::path discoverWrsrGameExe(const std::filesystem::path& baseDir,
 
 std::filesystem::path workshopRootFromGameExe(const std::filesystem::path& gameExe)
 {
-    if (gameExe.empty()) return {};
-    const auto gameDir = gameExe.parent_path();
-    const auto common  = gameDir.parent_path();
-    if (_wcsicmp(common.filename().c_str(), L"common") != 0) {
-        return {};
+    if (!gameExe.empty()) {
+        const auto gameDir = gameExe.parent_path();
+        const auto common  = gameDir.parent_path();
+        if (_wcsicmp(common.filename().c_str(), L"common") == 0) {
+            const auto steamapps = common.parent_path();
+            if (_wcsicmp(steamapps.filename().c_str(), L"steamapps") == 0) {
+                return steamapps / L"workshop" / L"content" / L"784150";
+            }
+        }
     }
-    const auto steamapps = common.parent_path();
-    if (_wcsicmp(steamapps.filename().c_str(), L"steamapps") != 0) {
-        return {};
+    std::error_code ec;
+    for (const auto& lib : discoverSteamLibraries()) {
+        const auto cand = lib / L"steamapps" / L"workshop" / L"content" / L"784150";
+        if (std::filesystem::is_directory(cand, ec)) {
+            return cand;
+        }
     }
-    return steamapps / L"workshop" / L"content" / L"784150";
+    return {};
+}
+
+SteamDefaultPaths discoverSteamDefaultPaths()
+{
+    SteamDefaultPaths out;
+    std::error_code ec;
+    const auto libs = discoverSteamLibraries();
+
+    std::filesystem::path steamGameDir;
+    for (const auto& lib : libs) {
+        const auto candDir = lib / L"steamapps" / L"common" / L"SovietRepublic";
+        if (std::filesystem::is_regular_file(candDir / L"SOVIET64.exe", ec) ||
+            std::filesystem::is_directory(candDir, ec)) {
+            steamGameDir = candDir;
+            const auto ws = lib / L"steamapps" / L"workshop" / L"content" / L"784150";
+            if (std::filesystem::is_directory(ws, ec)) {
+                out.workshopRoot = ws;
+            }
+            break;
+        }
+    }
+
+    if (out.workshopRoot.empty()) {
+        for (const auto& lib : libs) {
+            const auto ws = lib / L"steamapps" / L"workshop" / L"content" / L"784150";
+            if (std::filesystem::is_directory(ws, ec)) {
+                out.workshopRoot = ws;
+                break;
+            }
+        }
+    }
+
+    if (!steamGameDir.empty()) {
+        out.saveRoot        = steamGameDir / L"media_soviet" / L"save";
+        out.workshopWipRoot = steamGameDir / L"media_soviet" / L"workshop_wip";
+        out.overridesRoot   = steamGameDir / L"media_overrides";
+    }
+    return out;
+}
+
+EffectiveGamePaths resolveEffectiveGamePaths(const std::filesystem::path& gameExeOrDir,
+                                             const IniFile& grmlConfig)
+{
+    EffectiveGamePaths out;
+    std::filesystem::path gameDir;
+    if (!gameExeOrDir.empty()) {
+        std::error_code ec;
+        if (std::filesystem::is_directory(gameExeOrDir, ec) ||
+            _wcsicmp(gameExeOrDir.extension().c_str(), L".exe") != 0) {
+            gameDir = gameExeOrDir;
+        } else {
+            gameDir = gameExeOrDir.parent_path();
+        }
+    }
+
+    if (!gameDir.empty()) {
+        out.saveRoot        = gameDir / L"media_soviet" / L"save";
+        out.workshopWipRoot = gameDir / L"media_soviet" / L"workshop_wip";
+        out.overridesRoot   = gameDir / L"media_overrides";
+        out.workshopRoot    = workshopRootFromGameExe(gameDir / L"SOVIET64.exe");
+    } else {
+        out.workshopRoot = workshopRootFromGameExe({});
+    }
+
+    out.devMode = grmlConfig.getBool("general", "dev_mode", false);
+    if (out.devMode) {
+        auto readOverride = [&](const char* key) -> std::filesystem::path {
+            std::string raw = grmlConfig.getString("general", key, "");
+            while (!raw.empty() && (raw.back() == '\\' || raw.back() == '/' || raw.back() == ' ')) {
+                raw.pop_back();
+            }
+            if (raw.empty()) return {};
+            return std::filesystem::path(utf8ToWide(raw)).lexically_normal();
+        };
+        if (grmlConfig.getBool("general", "dev_save_enabled", false)) {
+            if (auto p = readOverride("dev_save_path"); !p.empty()) out.saveRoot = std::move(p);
+        }
+        if (grmlConfig.getBool("general", "dev_workshop_enabled", false)) {
+            if (auto p = readOverride("dev_workshop_path"); !p.empty()) out.workshopRoot = std::move(p);
+        }
+        if (grmlConfig.getBool("general", "dev_workshop_wip_enabled", false)) {
+            if (auto p = readOverride("dev_workshop_wip_path"); !p.empty()) out.workshopWipRoot = std::move(p);
+        }
+        if (grmlConfig.getBool("general", "dev_overrides_enabled", false)) {
+            if (auto p = readOverride("dev_overrides_path"); !p.empty()) out.overridesRoot = std::move(p);
+        }
+    }
+    return out;
 }
 
 } // namespace grml

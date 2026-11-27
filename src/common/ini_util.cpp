@@ -463,4 +463,35 @@ std::filesystem::path getAppDataDir(const std::filesystem::path& fallbackDir)
     return fallbackDir;
 }
 
+bool syncDefaultIniKeys(const std::filesystem::path& targetIniPath,
+                        std::string_view embeddedDefaultIni)
+{
+    if (targetIniPath.empty() || embeddedDefaultIni.empty()) return false;
+
+    std::error_code ec;
+    if (!std::filesystem::exists(targetIniPath, ec)) {
+        return writeFileBytesW(targetIniPath, embeddedDefaultIni);
+    }
+
+    IniFile defIni;
+    if (!defIni.loadFromMemory(embeddedDefaultIni)) return false;
+
+    IniFile userIni;
+    if (!userIni.loadFromFile(targetIniPath)) return false;
+
+    std::vector<IniKeyUpdate> missing;
+    for (const auto& sec : defIni.sectionOrder()) {
+        const auto* defKeys = defIni.sectionKeys(sec);
+        if (!defKeys) continue;
+        const auto* userKeys = userIni.sectionKeys(sec);
+        for (const auto& [k, v] : *defKeys) {
+            if (!userKeys || userKeys->find(k) == userKeys->end()) {
+                missing.push_back({sec, k, v});
+            }
+        }
+    }
+    if (missing.empty()) return false;
+    return updateIniFilePreservingComments(targetIniPath, missing);
+}
+
 } // namespace grml

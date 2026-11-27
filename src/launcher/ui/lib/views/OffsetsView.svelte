@@ -14,16 +14,6 @@
 		offsetEntries.filter((o) => o.required && o.status === 'MISSING')
 	);
 	const groupedOffsets = $derived.by(() => {
-		const order = [
-			'Core',
-			'TimeAndSim',
-			'Economy',
-			'EntityManagers',
-			'Templates',
-			'SaveLoad',
-			'CameraAndUI',
-			'General'
-		];
 		const map = new Map<string, typeof offsetEntries>();
 		for (const e of offsetEntries) {
 			const cat = e.category || 'General';
@@ -31,14 +21,17 @@
 			map.get(cat)!.push(e);
 		}
 		const out: Array<{ category: string; items: typeof offsetEntries }> = [];
-		for (const c of order) {
-			if (map.has(c)) {
-				out.push({ category: c, items: map.get(c)! });
-				map.delete(c);
-			}
+		if (map.has('Core')) {
+			out.push({ category: 'Core', items: map.get('Core')! });
+			map.delete('Core');
 		}
+		const general = map.get('General');
+		if (general) map.delete('General');
 		for (const [c, items] of map.entries()) {
 			out.push({ category: c, items });
+		}
+		if (general) {
+			out.push({ category: 'General', items: general });
 		}
 		return out;
 	});

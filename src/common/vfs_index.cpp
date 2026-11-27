@@ -153,10 +153,9 @@ std::wstring findFirstMediaZipInDir(const std::wstring& dir, size_t& outZipCount
     return matched;
 }
 
-void scanLocalPacks(const std::wstring& gameDir, std::vector<PackInfo>& discovered)
+void scanLocalPacks(const std::wstring& overridesDir, std::vector<PackInfo>& discovered)
 {
-    const std::wstring overridesDir = gameDir + L"\\media_overrides";
-    if (!dirExists(overridesDir)) return;
+    if (overridesDir.empty() || !dirExists(overridesDir)) return;
 
     WIN32_FIND_DATAW ffd{};
     HANDLE hFind = FindFirstFileW((overridesDir + L"\\*").c_str(), &ffd);
@@ -209,11 +208,8 @@ void scanLocalPacks(const std::wstring& gameDir, std::vector<PackInfo>& discover
     FindClose(hFind);
 }
 
-void scanWorkshopPacks(const std::filesystem::path& gameExeOrDir, std::vector<PackInfo>& discovered)
+void scanWorkshopPacks(const std::filesystem::path& wsRootPath, std::vector<PackInfo>& discovered)
 {
-    std::filesystem::path fakeExe = gameExeOrDir;
-    if (std::filesystem::is_directory(fakeExe)) fakeExe /= L"SOVIET64.exe";
-    const auto wsRootPath = workshopRootFromGameExe(fakeExe);
     const std::wstring wsRoot = wsRootPath.wstring();
     if (wsRoot.empty() || !dirExists(wsRoot)) return;
 
@@ -262,7 +258,9 @@ VfsIndex& VfsIndex::get() noexcept
 
 void VfsIndex::build(const std::filesystem::path& loaderDir,
                      const std::filesystem::path& gameDir,
-                     bool extractZips)
+                     bool extractZips,
+                     const std::filesystem::path& workshopRootOverride,
+                     const std::filesystem::path& overridesRootOverride)
 {
     m_map.clear();
     m_packs.clear();
@@ -292,11 +290,19 @@ void VfsIndex::build(const std::filesystem::path& loaderDir,
         }
     }
 
-    const std::wstring gameDirW = gameDir.wstring();
+    const std::wstring overridesDirW = !overridesRootOverride.empty()
+        ? overridesRootOverride.wstring()
+        : (gameDir.empty() ? std::wstring{} : (gameDir / L"media_overrides").wstring());
+    const std::filesystem::path wsRoot = !workshopRootOverride.empty()
+        ? workshopRootOverride
+        : (gameDir.empty() ? workshopRootFromGameExe({}) : workshopRootFromGameExe(gameDir / L"SOVIET64.exe"));
+
     std::vector<PackInfo> discovered;
-    if (!gameDirW.empty()) {
-        scanLocalPacks(gameDirW, discovered);
-        scanWorkshopPacks(gameDir, discovered);
+    if (!overridesDirW.empty()) {
+        scanLocalPacks(overridesDirW, discovered);
+    }
+    if (!wsRoot.empty()) {
+        scanWorkshopPacks(wsRoot, discovered);
     }
 
     std::sort(discovered.begin(), discovered.end(), [](const PackInfo& a, const PackInfo& b) {
@@ -343,7 +349,7 @@ void VfsIndex::build(const std::filesystem::path& loaderDir,
         if (!pack.zipPath.empty()) {
             if (!extractZips) continue;
             const std::wstring cacheDir =
-                gameDirW + L"\\media_overrides\\.vfs_cache\\" + sanitizeIdForPath(pack.id);
+                overridesDirW + L"\\.vfs_cache\\" + sanitizeIdForPath(pack.id);
             zip::extractMediaEntries(pack.zipPath, cacheDir, files);
         } else {
             const std::wstring mediaSub    = pack.rootDir + L"\\media_soviet";

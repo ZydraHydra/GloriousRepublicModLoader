@@ -60,7 +60,9 @@ public:
     // merges saved state from <loaderDir>\grml_vfs.ini, and builds the immutable VFS map.
     void build(const std::filesystem::path& loaderDir,
                const std::filesystem::path& gameDir,
-               bool extractZips = true);
+               bool extractZips = true,
+               const std::filesystem::path& workshopRootOverride = {},
+               const std::filesystem::path& overridesRootOverride = {});
 
     // Persists updated settings + pack order/enabled flags to <loaderDir>\grml_vfs.ini.
     static bool saveConfig(const std::filesystem::path& loaderDir,

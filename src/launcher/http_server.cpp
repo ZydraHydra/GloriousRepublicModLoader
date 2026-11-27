@@ -12,6 +12,7 @@
 #include <ws2tcpip.h>
 #include <commdlg.h>
 #include <shellapi.h>
+#include <shobjidl.h>
 #include <tlhelp32.h>
 #include <winhttp.h>
 
@@ -154,9 +155,10 @@ std::string readSessionLastSave(const std::filesystem::path& dataDir)
 std::string findMostRecentSaveFolderFromGameDir(const std::filesystem::path& gameDir,
                                                 const std::filesystem::path& dataDir)
 {
-    if (gameDir.empty()) return {};
-
-    const std::filesystem::path savesRoot = gameDir / L"media_soviet" / L"save";
+    grml::IniFile cfg;
+    cfg.loadFromFile(dataDir / L"grml.ini");
+    const std::filesystem::path savesRoot = grml::resolveEffectiveGamePaths(gameDir, cfg).saveRoot;
+    if (savesRoot.empty()) return {};
     std::error_code ec;
     std::filesystem::file_time_type bestTime{};
     std::string bestName;
@@ -1146,6 +1148,56 @@ void handleClient(SOCKET client)
             const std::string chosen = grml::wideToUtf8(fileBuf);
             sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8",
                              "{\"ok\":true,\"path\":\"" + grml::launcher_api::jsonEscape(chosen) + "\"}");
+        } else {
+            sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8", "{\"ok\":false,\"cancelled\":true}");
+        }
+    } else if (method == "GET" && path == "/api/browse-folder") {
+        const auto it = query.find("current");
+        std::wstring initialDir;
+        if (it != query.end() && !it->second.empty()) {
+            const std::filesystem::path p = grml::utf8ToWide(it->second);
+            std::error_code ec;
+            if (std::filesystem::is_directory(p, ec)) {
+                initialDir = p.wstring();
+            } else if (p.has_parent_path() && std::filesystem::is_directory(p.parent_path(), ec)) {
+                initialDir = p.parent_path().wstring();
+            }
+        }
+        const HRESULT coHr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        std::string chosenUtf8;
+        bool picked = false;
+        IFileOpenDialog* dlg = nullptr;
+        if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg))) && dlg) {
+            DWORD opts = 0;
+            if (SUCCEEDED(dlg->GetOptions(&opts))) {
+                dlg->SetOptions(opts | FOS_PICKFOLDERS | FOS_PATHMUSTEXIST | FOS_NOCHANGEDIR);
+            }
+            dlg->SetTitle(L"Select Folder");
+            if (!initialDir.empty()) {
+                IShellItem* initItem = nullptr;
+                if (SUCCEEDED(SHCreateItemFromParsingName(initialDir.c_str(), nullptr, IID_PPV_ARGS(&initItem))) && initItem) {
+                    dlg->SetFolder(initItem);
+                    initItem->Release();
+                }
+            }
+            if (SUCCEEDED(dlg->Show(nullptr))) {
+                IShellItem* resItem = nullptr;
+                if (SUCCEEDED(dlg->GetResult(&resItem)) && resItem) {
+                    PWSTR pszPath = nullptr;
+                    if (SUCCEEDED(resItem->GetDisplayName(SIGDN_FILESYSPATH, &pszPath)) && pszPath) {
+                        chosenUtf8 = grml::wideToUtf8(pszPath);
+                        picked = !chosenUtf8.empty();
+                        CoTaskMemFree(pszPath);
+                    }
+                    resItem->Release();
+                }
+            }
+            dlg->Release();
+        }
+        if (SUCCEEDED(coHr)) CoUninitialize();
+        if (picked) {
+            sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8",
+                             "{\"ok\":true,\"path\":\"" + grml::launcher_api::jsonEscape(chosenUtf8) + "\"}");
         } else {
             sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8", "{\"ok\":false,\"cancelled\":true}");
         }

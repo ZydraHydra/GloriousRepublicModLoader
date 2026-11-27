@@ -127,16 +127,28 @@ def parse_int_auto(s: str, default: int = 0) -> int:
     return int(s, 0)
 
 
+def get_versioned_key(kv: Dict[str, str], key: str, build_ver: str, default: str = "") -> str:
+    if build_ver and build_ver != "unknown":
+        parts = build_ver.split(".")
+        while parts:
+            vk = f"{key}.{'.'.join(parts)}"
+            if vk in kv and kv[vk].strip():
+                return kv[vk]
+            parts.pop()
+    return kv.get(key, default)
+
+
 def resolve_target(
     pe_ctx: PeContext,
     match_text_off: int,
     kv: Dict[str, str],
+    build_ver: str = "",
 ) -> Tuple[int, Optional[int], str]:
     match_rva = pe_ctx.text_va + match_text_off
-    mode = kv.get("resolve", "function_start").strip().lower()
-    op_off = parse_int_auto(kv.get("op_offset", "0"), 0)
-    instr_len = parse_int_auto(kv.get("instr_len", "0"), 0)
-    extra = parse_int_auto(kv.get("extra_offset", "0"), 0)
+    mode = get_versioned_key(kv, "resolve", build_ver, "function_start").strip().lower()
+    op_off = parse_int_auto(get_versioned_key(kv, "op_offset", build_ver, "0"), 0)
+    instr_len = parse_int_auto(get_versioned_key(kv, "instr_len", build_ver, "0"), 0)
+    extra = parse_int_auto(get_versioned_key(kv, "extra_offset", build_ver, "0"), 0)
 
     if mode == "function_start":
         return match_rva, match_rva + extra, mode
@@ -356,12 +368,12 @@ def run_verify_all(pe_ctx: PeContext, offsets_path: Path) -> int:
         if not is_declarative_section(sec_name, kv):
             continue
         checked += 1
-        pat = kv["pattern"]
+        pat = get_versioned_key(kv, "pattern", detected_ver, "").strip()
         required = kv.get("required", "false").strip().lower() in ("1", "true", "yes")
         matches = scan_text_pattern(pe_ctx.text_bytes, pat)
 
         if len(matches) == 1:
-            match_rva, target, mode = resolve_target(pe_ctx, matches[0], kv)
+            match_rva, target, mode = resolve_target(pe_ctx, matches[0], kv, detected_ver)
             if target is None:
                 print(f"  [FAIL]     {sec_name:<24} @ 0x{match_rva:08X} -> invalid {mode} metadata")
                 if required:

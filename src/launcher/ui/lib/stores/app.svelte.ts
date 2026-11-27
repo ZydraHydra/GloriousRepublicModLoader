@@ -132,6 +132,13 @@ export interface DiscoveryData {
 	peEntryPoint?: string;
 	offsetsHash?: string;
 	offsets?: OffsetDiagnosticEntry[];
+	showDevSettings?: boolean;
+	steamDefaults?: {
+		saveRoot?: string;
+		workshopRoot?: string;
+		workshopWipRoot?: string;
+		overridesRoot?: string;
+	};
 	warnings: string[];
 	mods: ModItem[];
 }
@@ -226,6 +233,15 @@ class AppStore {
 	chkSkipIntro = $state(true);
 	chkVfsEnabled = $state(true);
 	overlayHotkey = $state('F9');
+	chkDevMode = $state(false);
+	chkDevSave = $state(false);
+	chkDevWorkshop = $state(false);
+	chkDevWip = $state(false);
+	chkDevOverrides = $state(false);
+	devSavePath = $state('');
+	devWorkshopPath = $state('');
+	devWorkshopWipPath = $state('');
+	devOverridesPath = $state('');
 
 	// Saves state
 	savesData = $state<SavesResponse | null>(null);
@@ -297,6 +313,16 @@ class AppStore {
 		this.chkWip = gen.scan_workshop_wip !== '0';
 		this.chkVfsEnabled = this.vfs.enabled !== false;
 		this.overlayHotkey = (gen.overlay_hotkey || 'F9').trim() || 'F9';
+		this.chkDevMode = gen.dev_mode === '1';
+		this.chkDevSave = gen.dev_save_enabled === '1';
+		this.chkDevWorkshop = gen.dev_workshop_enabled === '1';
+		this.chkDevWip = gen.dev_workshop_wip_enabled === '1';
+		this.chkDevOverrides = gen.dev_overrides_enabled === '1';
+		const sd = data.discovery?.steamDefaults;
+		this.devSavePath = gen.dev_save_path || sd?.saveRoot || '';
+		this.devWorkshopPath = gen.dev_workshop_path || sd?.workshopRoot || '';
+		this.devWorkshopWipPath = gen.dev_workshop_wip_path || sd?.workshopWipRoot || '';
+		this.devOverridesPath = gen.dev_overrides_path || sd?.overridesRoot || '';
 
 		this.setStatus(t('status.loadedMods', { count: data.discovery?.mods?.length ?? 0 }));
 	}
@@ -347,7 +373,16 @@ class AppStore {
 			scan_workshop: this.chkWorkshop ? '1' : '0',
 			scan_workshop_wip: this.chkWip ? '1' : '0',
 			overlay_hotkey: this.overlayHotkey || 'F9',
-			language: i18n.setting || 'auto'
+			language: i18n.setting || 'auto',
+			dev_mode: this.chkDevMode ? '1' : '0',
+			dev_save_enabled: this.chkDevSave ? '1' : '0',
+			dev_save_path: this.devSavePath.trim(),
+			dev_workshop_enabled: this.chkDevWorkshop ? '1' : '0',
+			dev_workshop_path: this.devWorkshopPath.trim(),
+			dev_workshop_wip_enabled: this.chkDevWip ? '1' : '0',
+			dev_workshop_wip_path: this.devWorkshopWipPath.trim(),
+			dev_overrides_enabled: this.chkDevOverrides ? '1' : '0',
+			dev_overrides_path: this.devOverridesPath.trim()
 		};
 		const resp = await fetch('/api/config', {
 			method: 'POST',

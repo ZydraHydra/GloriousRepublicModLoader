@@ -47,6 +47,29 @@ DEFAULT_RTTI_KEYWORDS = [
     "Camera",
 ]
 
+CATEGORY_ANCHORS: Dict[str, Dict[str, List[str]]] = {
+    "LogisticsAndRouting": {
+        "strings": ["fuel_station", "repair", "distribution", "line_", "waypoint"],
+        "rtti": ["Distribution", "Line", "Waypoint"],
+    },
+    "RailAndTerrain": {
+        "strings": ["semaphore", "block", "train", "heightmap"],
+        "rtti": ["Rail", "Semaphore", "Terrain"],
+    },
+    "UtilitiesAndClimate": {
+        "strings": ["substation", "heating", "boiler", "temperature", "snow"],
+        "rtti": ["Electric", "Heating", "Weather"],
+    },
+    "ProgressionAndRules": {
+        "strings": ["realistic", "research", "university", "space", "rocket"],
+        "rtti": ["Research", "Difficulty"],
+    },
+    "WorkshopAndVFS": {
+        "strings": ["workshop", "784150", "workshopconfig.ini"],
+        "rtti": ["Workshop"],
+    },
+}
+
 
 class PeAnalyzer:
     def __init__(self, exe_path: Path) -> None:
@@ -316,6 +339,12 @@ def main() -> int:
     parser.add_argument("--exe", required=True, type=Path, help="Path to SOVIET64.exe")
     parser.add_argument("--strings", action="store_true", help="Scan .rdata engine strings & .text XREFs")
     parser.add_argument("--rtti", action="store_true", help="Enumerate MSVC x64 RTTI vtables")
+    parser.add_argument(
+        "--category",
+        type=str,
+        default=None,
+        help=f"Domain category filter ({', '.join(CATEGORY_ANCHORS.keys())}, or 'all')",
+    )
     parser.add_argument("--filter", type=str, default=None, help="Case-insensitive keyword filter")
     parser.add_argument("--json", action="store_true", help="Emit JSON output")
     args = parser.parse_args()
@@ -328,17 +357,43 @@ def main() -> int:
         print(f"Error: Executable not found: {args.exe}", file=sys.stderr)
         return 2
 
+    string_targets = list(DEFAULT_STRINGS)
+    rtti_keywords = list(DEFAULT_RTTI_KEYWORDS)
+
+    if args.category:
+        if args.category.lower() == "all":
+            string_targets = []
+            rtti_keywords = []
+            for cat in CATEGORY_ANCHORS.values():
+                string_targets.extend(cat["strings"])
+                rtti_keywords.extend(cat["rtti"])
+            string_targets.extend(DEFAULT_STRINGS)
+            rtti_keywords.extend(DEFAULT_RTTI_KEYWORDS)
+        else:
+            matched_cat = next(
+                (k for k in CATEGORY_ANCHORS if k.lower() == args.category.lower()),
+                None,
+            )
+            if not matched_cat:
+                valid = ", ".join(list(CATEGORY_ANCHORS.keys()) + ["all"])
+                print(f"Error: Unknown category '{args.category}'. Valid: {valid}", file=sys.stderr)
+                return 2
+            string_targets = list(CATEGORY_ANCHORS[matched_cat]["strings"])
+            rtti_keywords = list(CATEGORY_ANCHORS[matched_cat]["rtti"])
+
     pe = PeAnalyzer(args.exe)
     payload: Dict[str, Any] = {"exe": str(args.exe)}
+    if args.category:
+        payload["category"] = args.category
 
     if args.strings:
-        targets = list(DEFAULT_STRINGS)
+        targets = list(string_targets)
         if args.filter and all(args.filter.lower() not in t.lower() for t in targets):
             targets.append(args.filter)
         payload["string_xrefs"] = scan_string_xrefs(pe, targets, args.filter)
 
     if args.rtti:
-        payload["rtti_vtables"] = scan_rtti_vtables(pe, DEFAULT_RTTI_KEYWORDS, args.filter)
+        payload["rtti_vtables"] = scan_rtti_vtables(pe, rtti_keywords, args.filter)
 
     if args.json:
         print(json.dumps(payload, indent=2))
