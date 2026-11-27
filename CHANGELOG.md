@@ -1,5 +1,16 @@
 # Changelog
 
+## Glorious Republic Mod Loader (GRML) v2.1.0
+
+### Offsets & Signatures Page
+- **Dedicated "Offsets & Signatures" launcher page (`OffsetsView.svelte`):** Displays all 6 offset categories (`core`, `simulation`, `rendering`, `input`, `audio`, `ui`) with per-row `OK` / `CACHED` / `MISSING` status badges, aligned fixed-width columns, latest verified game build badge, and a `+N` hover popover listing all older verified builds.
+- **Multi-version AOB patterns in `config/grml_offsets.ini`:** Each offset entry now carries separate `pattern_1_1_1_7`, `pattern_1_2_0_8`, and `pattern_1_2_0_9` variants so the runtime can resolve the correct byte sequence without manual edits on game updates.
+- **`scripts/harvest_anchors.py`:** New tool that scrapes a live `SOVIET64.exe` binary for unique anchor byte-sequences to seed new AOB pattern entries.
+- **`scripts/gen_sig.py` extensions:** `--category` flag to target a specific offset group, `--required` / `--strict` flags to gate launch on offset availability, automatic `grml_offsets.ini` write-back.
+- **Pre-flight mod compatibility gate:** Launcher cross-checks each mod's `required_offsets` / `optional_offsets` manifest keys before launch and classifies the mod as `Ready`, `Degraded`, `Needs Offset Update`, or `Legacy`; offers one-click temporary disable for affected mods.
+- **`docs/OFFSET_CATALOG.md`:** New full catalog doc listing all 31 declared offsets across the 6 categories with descriptions, ABI fields, and version coverage.
+- **21 locale files updated** with `nav.offsets` translation key for the new nav tab.
+
 ## Glorious Republic Mod Loader (GRML) v2.0.0
 
 ### Highlights & Architecture

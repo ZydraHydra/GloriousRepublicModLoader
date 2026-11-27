@@ -33,6 +33,9 @@ GRML lets you manage Steam Workshop (`784150`) and local DLL mods, tweak mod `.i
   - If `SOVIET64.exe` crashes after loading a save, GRML alerts you with a one-click **Inspect Save** banner.
 - **Diagnostics & CrashGuard:**
   - View live `grml.log` output (with severity highlighting, search, and level filters), Windows crash attribution, and a one-click **Disable Mod** button if a plugin faults.
+- **Offsets & Pre-Flight Compatibility:**
+  - Inspect all 6 categories of `grml_offsets.ini` signatures on the dedicated **Offsets & Signatures** page with live `OK` / `CACHED` / `MISSING` status, latest verified build + hover history, and one-click OTA updates from GitHub.
+  - Pre-flight PE scanning cross-checks each mod's `required_offsets` / `optional_offsets` before launch (`Ready`, `Degraded`, `Needs Offset Update`, `Legacy`) and offers one-click temporary disabling of affected mods.
 
 ---
 
@@ -68,6 +71,9 @@ All user files live in `%LOCALAPPDATA%\GRML`:
 | :---: | :---: |
 | ![Loader Settings](docs/screenshots/07_settings.png) | ![External Mod UI Guide](docs/screenshots/06_ui_guide.png) |
 
+### Offsets & Signatures
+![Offsets & Signatures](docs/screenshots/08_offsets.png)
+
 ---
 
 ## For Mod Authors & Developers
@@ -78,6 +84,7 @@ GRML provides a pure-C ABI (`include/grml_api.h`), declarative UI schemas (`*.ui
 - [Architecture Overview](docs/ARCHITECTURE.md)
 - [Plugin SDK (`include/grml_api.h`)](docs/PLUGIN_SDK.md)
 - [Offsets, PE-Hash Caching & `gen_sig.py`](docs/OFFSETS_AND_SIGNATURES.md)
+- [Base Offset Catalog (`config/grml_offsets.ini`)](docs/OFFSET_CATALOG.md)
 - [Direct-to-Save Launch & Intro Skip (`SOVIET64.exe` `1.2.0.9`)](docs/DIRECT_SAVE_LOAD.md)
 - [Declarative & Auto-Built UI Schema](docs/DECLARATIVE_UI_SCHEMA.md)
 - [Hooking & Performance Rules](docs/HOOKING_AND_PERFORMANCE_RULES.md)
@@ -105,7 +112,7 @@ This builds the SvelteKit static UI (`src/launcher/ui/` -> `build/dist/`), compi
 ├── config/                            # Default grml.ini & grml_offsets.ini
 ├── docs/                              # Architecture, SDK, UI Schema & Hooking rules
 ├── include/grml_api.h                 # Canonical pure-C host/plugin ABI (v2)
-├── scripts/                           # Screenshot capture & reference helper scripts
+├── scripts/                           # Signature/anchor tooling, i18n check, & screenshot capture
 ├── src/
 │   ├── common/                        # PE/AOB scanner, INI, JSON, Manifest, UI Schema, VFS
 │   ├── launcher/                      # Native Win32 + WebView2 host, HTTP API, injector

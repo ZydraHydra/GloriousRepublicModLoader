@@ -1,4 +1,4 @@
-// Captures clean 1240x780 screenshots of all 7 GRML Launcher pages into docs/screenshots/
+// Captures clean 1240x780 screenshots of all 8 GRML Launcher pages into docs/screenshots/
 // using GloriousRepublicModLoader.exe --serve-only + headless Microsoft Edge CDP.
 import { dirname, fromFileUrl, join, resolve } from "jsr:@std/path@1";
 import { decodeBase64 } from "jsr:@std/encoding@1/base64";
@@ -220,6 +220,10 @@ try {
   await sleep(350);
   await cdp.screenshot(join(outDir, "04_save_inspector.png"));
 
+  await clickNav("Offsets & Signatures");
+  await sleep(400);
+  await cdp.screenshot(join(outDir, "08_offsets.png"));
+
   await clickNav("Diagnostics & Logs");
   await sleep(500);
   await cdp.screenshot(join(outDir, "05_diagnostics.png"));
@@ -230,7 +234,7 @@ try {
   await clickNav("Settings");
   await cdp.screenshot(join(outDir, "07_settings.png"));
 
-  console.log(`All 7 screenshots saved to ${outDir}`);
+  console.log(`All 8 screenshots saved to ${outDir}`);
 } finally {
   cdp?.close();
   try {

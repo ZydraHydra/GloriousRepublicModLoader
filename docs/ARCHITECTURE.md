@@ -8,6 +8,10 @@ GloriousRepublicModLoader.exe (Native Win32 + WebView2, src/launcher/)
    │  • Discovery: plugins, manifests, topo-sort, UI schemas, Media VFS, Save Inspector
    │  • Config I/O: comment-preserving grml.ini, grml_vfs.ini, configs/<id>.ini (%LOCALAPPDATA%\GRML)
    │  • Diagnostics & Updates: SOVIET64.exe status, WER EventID 1000, GitHub Release & Offset OTA check
+   │  • Offsets & Signatures: dedicated page (OffsetsView.svelte) showing 6 categories of grml_offsets.ini
+   │    signatures with live OK/CACHED/MISSING status, latest verified build + hover history, OTA update
+   │  • Pre-flight Gate: cross-checks each mod's required_offsets/optional_offsets before launch and
+   │    classifies mods as Ready / Degraded / Needs Offset Update / Legacy
    │  • Injection: CreateProcessW(CREATE_SUSPENDED) -> LoadLibraryW(grml_runtime.dll) -> GrmlBootstrap
    ▼
 grml_runtime.dll (src/runtime/, injected into SOVIET64.exe)
@@ -22,6 +26,38 @@ grml_runtime.dll (src/runtime/, injected into SOVIET64.exe)
    └── overlay_hub      DX11/ImGui Mod Settings dialog, standalone windows, hotkeys & telemetry
 ```
 
+## Launcher UI Pages (`src/launcher/ui/lib/views/`)
+
+| View file | Nav label | Purpose |
+|---|---|---|
+| `ModsView.svelte` | Mods & Load Order | Enable/disable/reorder plugins, version badges, dependency checks |
+| `PlaylistsView.svelte` | Playlists | Save/restore mod selection presets |
+| `OverridesView.svelte` | Asset Overrides | Media VFS pack priority & conflict inspection |
+| `SaveInspectorView.svelte` | Save Inspector | Scan saves, spot missing Workshop IDs, direct-to-save launch |
+| `DiagnosticsView.svelte` | Diagnostics & Logs | Live grml.log, crash attribution, one-click mod disable |
+| `UIGuideView.svelte` | UI Guide | Declarative & auto-built UI schema reference |
+| `SettingsView.svelte` | Settings | Game path, hotkey, update check, discovery options |
+| `OffsetsView.svelte` | Offsets & Signatures | Per-category offset health, build verification, OTA update |
+
 ## Shared Library (`src/common/`)
 
 Both `GloriousRepublicModLoader.exe` and `grml_runtime.dll` link against `grml_common` so INI parsing/updating, manifest topological sorting, PE/AOB scanning, declarative/auto-built UI schemas, and Media VFS indexing share a single C++20 implementation with zero logic duplication.
+
+## Offset Pipeline
+
+```text
+config/grml_offsets.ini          Declarative patterns (6 categories, multi-version AOB variants)
+        │
+        ▼
+scripts/harvest_anchors.py       Scrapes SOVIET64.exe for anchor byte-sequences to seed new patterns
+scripts/gen_sig.py               Scans a live SOVIET64.exe, generates/updates grml_offsets.ini entries
+        │                        Flags: --category, --required, --strict
+        ▼
+grml_runtime.dll / pe_scanner    At injection time: single-pass .text scan, matches patterns,
+        │                        writes RVA into O(1) PE-hash cache (grml_offset_cache.ini)
+        ▼
+GrmlWrsrOffsets (grml_api.h)     Exposes resolved offsets to mods via GrmlHostApi::GetWrsrOffsets()
+        ▼
+OffsetsView.svelte               Launcher page: live OK/CACHED/MISSING status per offset,
+                                 latest verified build badge + +N hover popover for older builds
+```
