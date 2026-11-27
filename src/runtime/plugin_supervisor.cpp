@@ -19,8 +19,10 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace grml::supervisor {
@@ -78,6 +80,12 @@ struct RegisteredServiceEntry {
 };
 std::mutex                          g_serviceMutex;
 std::vector<RegisteredServiceEntry> g_services;
+
+std::string                                        g_activeLanguage{"en"};
+std::mutex                                         g_i18nMutex;
+std::unordered_map<std::string, std::filesystem::path> g_pluginDirs;
+std::unordered_map<std::string, TranslationMap>    g_pluginTranslations;
+std::deque<std::string>                            g_translationStringPool;
 
 bool isFatalCrashCode(DWORD code) noexcept
 {
@@ -338,6 +346,52 @@ int32_t GRML_CALL hostResolveNamedOffset(const char* sectionName, uintptr_t* out
     return 0;
 }
 
+const char* GRML_CALL hostGetLanguage(void)
+{
+    return g_activeLanguage.empty() ? "en" : g_activeLanguage.c_str();
+}
+
+int32_t GRML_CALL hostLoadTranslations(const char* pluginId, const wchar_t* localesDir)
+{
+    if (!pluginId || !*pluginId) return 0;
+    std::filesystem::path dir;
+    if (localesDir && *localesDir) {
+        dir = std::filesystem::path(localesDir);
+    } else {
+        std::lock_guard lock(g_i18nMutex);
+        if (const auto it = g_pluginDirs.find(pluginId); it != g_pluginDirs.end()) {
+            dir = it->second / L"locales";
+        }
+    }
+    if (dir.empty()) return 0;
+
+    TranslationMap dict;
+    if (!loadModLocaleDictionary(dir, g_activeLanguage, dict)) {
+        return 0;
+    }
+
+    std::lock_guard lock(g_i18nMutex);
+    g_pluginTranslations[pluginId] = std::move(dict);
+    return 1;
+}
+
+const char* GRML_CALL hostTranslate(const char* pluginId, const char* key)
+{
+    if (!key) return "";
+    if (!pluginId || !*pluginId) return key;
+
+    std::lock_guard lock(g_i18nMutex);
+    const auto pit = g_pluginTranslations.find(pluginId);
+    if (pit == g_pluginTranslations.end()) return key;
+    const auto kit = pit->second.find(key);
+    if (kit == pit->second.end()) return key;
+
+    // Return a stable pointer from g_translationStringPool (std::deque never
+    // invalidates references on push_back) so plugins can pass it directly to ImGui.
+    g_translationStringPool.push_back(kit->second);
+    return g_translationStringPool.back().c_str();
+}
+
 int32_t GRML_CALL wrsrIsInGame(void)
 {
     return (g_inGameFlagPtr && *g_inGameFlagPtr != 0) ? 1 : 0;
@@ -400,6 +454,9 @@ GrmlHostApi g_hostApi = {
     &hostRegisterService,
     &hostGetService,
     &hostResolveNamedOffset,
+    &hostGetLanguage,
+    &hostLoadTranslations,
+    &hostTranslate,
 };
 
 std::wstring formatHotkeyLabelW(uint16_t vk)
@@ -665,6 +722,15 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
     if (!grmlIni.loadFromFile(grmlIniPath)) {
         logger::logMessage(GRML_LOG_INFO, "Config", "No grml.ini found; using defaults");
     }
+    {
+        std::string lang = grmlIni.getString("general", "language", "auto");
+        if (lang.empty() || _stricmp(lang.c_str(), "auto") == 0) {
+            lang = detectWrsrGameLanguage(g_gameExePath.parent_path());
+            if (lang.empty()) lang = "en";
+        }
+        g_activeLanguage = std::move(lang);
+        logger::logMessage(GRML_LOG_INFO, "Config", "Active UI language: %s", g_activeLanguage.c_str());
+    }
 
     const std::filesystem::path pluginsDir =
         (_wcsicmp(g_loaderRoot.filename().c_str(), L"core") == 0 && g_loaderRoot.has_parent_path())
@@ -727,6 +793,7 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
     void* menuUiStateSite   = nullptr;
     void* loadSaveHdrSite   = nullptr;
     void* loadSaveTrigSite  = nullptr;
+    void* introSkipSite     = nullptr;
     const std::string inGamePat       = hasDeclSection("in_game_flag") ? std::string{} : offsetsIni.getString("signatures", "in_game_flag_aob", "");
     const std::string priceTablePat   = hasDeclSection("resource_vector") ? std::string{} : offsetsIni.getString("signatures", "price_table_aob", "");
     const std::string evalDistPat     = hasDeclSection("evaluate_dist_task") ? std::string{} : offsetsIni.getString("signatures", "dispatch_check_aob", "");
@@ -734,6 +801,8 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
     const std::string menuUiStatePat  = offsetsIni.getString("signatures", "main_menu_uistate_aob", "");
     const std::string loadSaveHdrPat  = offsetsIni.getString("signatures", "load_save_header_aob", "");
     const std::string loadSaveTrigPat = offsetsIni.getString("signatures", "load_save_trigger_aob", "");
+    const bool wantIntroSkip          = grmlIni.getBool("general", "skip_intro_logos", true);
+    const std::string introSkipPat    = wantIntroSkip ? offsetsIni.getString("signatures", "intro_skip_aob", "") : std::string{};
     {
         std::lock_guard lock(g_supMutex);
         if (!inGamePat.empty()) {
@@ -756,6 +825,9 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
         }
         if (!loadSaveTrigPat.empty()) {
             g_pendingScans.push_back({"load_save_trigger_aob", loadSaveTrigPat, &loadSaveTrigSite, false});
+        }
+        if (!introSkipPat.empty()) {
+            g_pendingScans.push_back({"intro_skip_aob", introSkipPat, &introSkipSite, false});
         }
     }
 
@@ -818,6 +890,10 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
 
         auto grmlInitFn = reinterpret_cast<GrmlPluginInitFn>(GetProcAddress(mod, "GrmlPluginInit"));
         if (ok && grmlInitFn) {
+            {
+                std::lock_guard lock(g_i18nMutex);
+                g_pluginDirs[rec.meta.id] = rec.meta.dllPath.parent_path();
+            }
             DWORD initExc = 0;
             if (!sehCallGrmlInit(grmlInitFn, &g_hostApi, &initExc)) {
                 ok = false;
@@ -996,6 +1072,22 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
                            loadSaveHdrSite != nullptr, loadSaveTrigSite != nullptr);
     }
 
+    if (introSkipSite) {
+        const uint32_t jeOff = static_cast<uint32_t>(offsetsIni.getInt("signatures", "intro_skip_je_off", 24));
+        auto* patchAddr = static_cast<uint8_t*>(introSkipSite) + jeOff;
+        if (patchAddr[0] == 0x74 && patchAddr[1] == 0x38) {
+            DWORD oldProt = 0;
+            if (VirtualProtect(patchAddr, 2, PAGE_EXECUTE_READWRITE, &oldProt)) {
+                patchAddr[0] = 0x90;
+                patchAddr[1] = 0x90;
+                VirtualProtect(patchAddr, 2, oldProt, &oldProt);
+                FlushInstructionCache(GetCurrentProcess(), patchAddr, 2);
+                logger::logMessage(GRML_LOG_INFO, "IntroSkip",
+                                   "Patched intro logo timer gate @ 0x%p (devlogo/publogo skipped)", patchAddr);
+            }
+        }
+    }
+
     // Phase 3: Post-scan callbacks & Tesmio TsmPluginStart
     {
         std::vector<PostScanEntry> cbs;
@@ -1037,8 +1129,9 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
         // Auto-register zero-code declarative UI schema (.ui.json / .ui.yaml / settingsUi)
         // OR auto-built INI settings UI for external/legacy mods without a custom GRML tab.
         if (rec.loaded && !rec.meta.hasGrmlInit && !overlay::hasRegisteredTabForPlugin(rec.meta.id)) {
-            const UiSchema schema = discoverModUiSchema(rec.meta.dllPath, rec.meta.manifestPath, rec.meta.name);
+            UiSchema schema = discoverModUiSchema(rec.meta.dllPath, rec.meta.manifestPath, rec.meta.name);
             if (schema.valid) {
+                applyModUiTranslations(schema, rec.meta.dllPath, g_activeLanguage);
                 const int32_t tid = overlay::registerExternalUiSchemaTab(
                     rec.meta.id, rec.meta.name, rec.meta.dllPath, rec.meta.manifestPath, schema);
                 if (tid >= 0) {
