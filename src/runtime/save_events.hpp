@@ -9,9 +9,11 @@
 // ============================================================================
 #include "grml_api.h"
 
+#include <filesystem>
+
 namespace grml::save_events {
 
-bool install();
+bool install(const std::filesystem::path& loaderDir = {});
 void shutdown();
 
 void registerLoadUnload(GrmlSaveEventFn onLoad, GrmlSaveEventFn onUnload, void* userData);

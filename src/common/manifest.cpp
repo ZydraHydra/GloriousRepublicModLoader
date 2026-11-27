@@ -58,12 +58,14 @@ struct ParsedManifest {
     std::string              author;
     std::string              description;
     std::string              dll;
+    std::string              image;
     int                      defaultPriority{1000};
     bool                     enabledByDefault{false};
     std::vector<std::string> dependencies;
     std::vector<std::string> conflictsWith;
     std::vector<std::string> loadAfter;
     std::vector<std::string> loadBefore;
+    std::vector<std::string> supportedGameVersions;
     std::filesystem::path    manifestPath;
     bool                     isGrmlManifest{false};
 };
@@ -90,6 +92,10 @@ std::optional<ParsedManifest> parseManifestFile(const std::filesystem::path& pat
     if (auto* v = root->get("author")) m.author = v->asString();
     if (auto* v = root->get("description")) m.description = v->asString();
     if (auto* v = root->get("dll")) m.dll = v->asString();
+    if (auto* v = root->get("image")) m.image = v->asString();
+    if (auto* v = root->get("icon")) m.image = v->asString();
+    if (auto* v = root->get("previewImage")) m.image = v->asString();
+    if (auto* v = root->get("preview_image")) m.image = v->asString();
     if (auto* v = root->get("defaultPriority")) m.defaultPriority = v->asInt(1000);
     if (auto* v = root->get("default_priority")) m.defaultPriority = v->asInt(m.defaultPriority);
     if (auto* v = root->get("enabledByDefault")) m.enabledByDefault = v->asBool(false);
@@ -111,6 +117,8 @@ std::optional<ParsedManifest> parseManifestFile(const std::filesystem::path& pat
     readList("conflicts", "conflicts_with", m.conflictsWith);
     readList("loadAfter", "load_after", m.loadAfter);
     readList("loadBefore", "load_before", m.loadBefore);
+    readList("supportedGameVersions", "supported_game_versions", m.supportedGameVersions);
+    readList("gameVersions", "game_versions", m.supportedGameVersions);
 
     if (m.id.empty() || m.name.empty() || m.dll.empty()) {
         outWarn = wideToUtf8(path.filename().wstring()) + ": manifest missing id/name/dll";
@@ -158,6 +166,27 @@ const char* loaderKindDisplayName(const DiscoveredPlugin& p) noexcept
     return "Unknown";
 }
 
+bool isGameVersionSupported(const DiscoveredPlugin& p, std::string_view gameVersion) noexcept
+{
+    if (p.supportedGameVersions.empty() || gameVersion.empty() || gameVersion == "unknown") {
+        return true;
+    }
+    const std::string target = toLowerAscii(gameVersion);
+    for (const auto& raw : p.supportedGameVersions) {
+        const std::string entry = toLowerAscii(raw);
+        if (entry == "*" || entry == "latest" || entry == target) {
+            return true;
+        }
+        if (!entry.empty() && entry.back() == '+') {
+            const std::string base = entry.substr(0, entry.size() - 1);
+            if (target >= base) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 DiscoveryResult discoverAllPlugins(const std::filesystem::path& loaderBaseDir,
                                    const std::filesystem::path& gameExePath,
                                    const IniFile& grmlConfig)
@@ -193,14 +222,22 @@ DiscoveryResult discoverAllPlugins(const std::filesystem::path& loaderBaseDir,
     }
 
     // Local loader plugin directories (highest familiarity for manual installs)
-    if (std::filesystem::is_directory(loaderBaseDir / L"plugins", ec)) {
-        scanDirs.emplace_back(loaderBaseDir / L"plugins", "");
+    const std::filesystem::path effectiveBase =
+        (_wcsicmp(loaderBaseDir.filename().c_str(), L"core") == 0 && loaderBaseDir.has_parent_path())
+            ? loaderBaseDir.parent_path()
+            : loaderBaseDir;
+    if (std::filesystem::is_directory(effectiveBase / L"plugins", ec)) {
+        scanDirs.emplace_back(effectiveBase / L"plugins", "");
     }
-    if (std::filesystem::is_directory(loaderBaseDir / L"plugin", ec)) {
-        scanDirs.emplace_back(loaderBaseDir / L"plugin", "");
+    if (std::filesystem::is_directory(effectiveBase / L"plugin", ec)) {
+        scanDirs.emplace_back(effectiveBase / L"plugin", "");
     }
-    if (std::filesystem::is_directory(loaderBaseDir / L"rml" / L"plugins", ec)) {
-        scanDirs.emplace_back(loaderBaseDir / L"rml" / L"plugins", "");
+    if (std::filesystem::is_directory(effectiveBase / L"rml" / L"plugins", ec)) {
+        scanDirs.emplace_back(effectiveBase / L"rml" / L"plugins", "");
+    }
+    const auto appDataPlugins = getAppDataDir() / L"plugins";
+    if (!appDataPlugins.empty() && std::filesystem::is_directory(appDataPlugins, ec)) {
+        scanDirs.emplace_back(appDataPlugins, "");
     }
 
     std::unordered_set<std::wstring> seenDirPaths;
@@ -290,6 +327,41 @@ DiscoveryResult discoverAllPlugins(const std::filesystem::path& loaderBaseDir,
                 p.loaderKind = PluginLoaderKind::RawNative;
             }
 
+            auto findModImage = [&](const std::string& explicitImg) -> std::filesystem::path {
+                const auto dllDir = entry.path().parent_path();
+                const auto stem   = entry.path().stem().wstring();
+                if (!explicitImg.empty()) {
+                    std::filesystem::path cand = utf8ToWide(explicitImg);
+                    if (cand.is_relative()) {
+                        if (std::filesystem::is_regular_file(dllDir / cand, ec)) return dllDir / cand;
+                        if (!p.manifestPath.empty() && std::filesystem::is_regular_file(p.manifestPath.parent_path() / cand, ec)) {
+                            return p.manifestPath.parent_path() / cand;
+                        }
+                    } else if (std::filesystem::is_regular_file(cand, ec)) {
+                        return cand;
+                    }
+                }
+                const std::filesystem::path searchDirs[] = {
+                    dllDir,
+                    dllDir.parent_path(),
+                    dllDir.parent_path() / L"steamcmd",
+                };
+                const std::wstring exts[] = {L".png", L".jpg", L".jpeg", L".webp"};
+                for (const auto& ext : exts) {
+                    if (std::filesystem::is_regular_file(dllDir / (stem + ext), ec)) return dllDir / (stem + ext);
+                }
+                for (const auto& sd : searchDirs) {
+                    if (sd.empty() || !std::filesystem::is_directory(sd, ec)) continue;
+                    for (const wchar_t* base : {L"previewimage", L"preview", L"icon", L"logo"}) {
+                        for (const auto& ext : exts) {
+                            const auto cand = sd / (std::wstring(base) + ext);
+                            if (std::filesystem::is_regular_file(cand, ec)) return cand;
+                        }
+                    }
+                }
+                return {};
+            };
+
             auto manIt = manifestsByDll.find(dllNameLower);
             if (manIt != manifestsByDll.end()) {
                 const auto& m = manIt->second;
@@ -303,12 +375,15 @@ DiscoveryResult discoverAllPlugins(const std::filesystem::path& loaderBaseDir,
                 p.enabledByDefault = m.enabledByDefault;
                 p.dependencies     = m.dependencies;
                 p.conflictsWith    = m.conflictsWith;
-                p.loadAfter        = m.loadAfter;
-                p.loadBefore       = m.loadBefore;
+                p.loadAfter             = m.loadAfter;
+                p.loadBefore            = m.loadBefore;
+                p.supportedGameVersions = m.supportedGameVersions;
+                p.imagePath             = findModImage(m.image);
             } else {
-                p.id      = syntheticIdFromFilename(entry.path());
-                p.name    = wideToUtf8(entry.path().stem().wstring());
-                p.version = "unversioned";
+                p.id        = syntheticIdFromFilename(entry.path());
+                p.name      = wideToUtf8(entry.path().stem().wstring());
+                p.version   = "unversioned";
+                p.imagePath = findModImage("");
             }
 
             if (!seenIds.insert(p.id).second) {

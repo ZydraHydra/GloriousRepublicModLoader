@@ -1,0 +1,641 @@
+#define _WINSOCK_DEPRECATED_NO_WARNINGS
+#include "launcher/http_server.hpp"
+#include "launcher/launcher_api.hpp"
+#include "common/ini_util.hpp"
+#include "common/json_min.hpp"
+#include "embedded_ui_assets.hpp"
+
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <commdlg.h>
+#include <shellapi.h>
+
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <mutex>
+#include <regex>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <unordered_map>
+#include <vector>
+
+namespace grml::http_server {
+
+namespace {
+
+SOCKET                g_listenSock = INVALID_SOCKET;
+std::thread           g_acceptThread;
+std::atomic<bool>     g_running{false};
+std::filesystem::path g_loaderDir;
+std::mutex            g_apiMutex;
+
+uint32_t g_lastLaunchPid    = 0;
+uint64_t g_lastLaunchMs     = 0;
+
+struct CachedModRef {
+    std::string id;
+    std::string name;
+    std::string dllPath;
+};
+std::vector<CachedModRef> g_cachedMods;
+
+uint64_t nowMs()
+{
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+}
+
+std::string urlDecode(std::string_view in)
+{
+    std::string out;
+    out.reserve(in.size());
+    for (size_t i = 0; i < in.size(); ++i) {
+        if (in[i] == '%' && i + 2 < in.size()) {
+            auto hexVal = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                return -1;
+            };
+            const int hi = hexVal(in[i + 1]);
+            const int lo = hexVal(in[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out.push_back(static_cast<char>((hi << 4) | lo));
+                i += 2;
+                continue;
+            }
+        } else if (in[i] == '+') {
+            out.push_back(' ');
+            continue;
+        }
+        out.push_back(in[i]);
+    }
+    return out;
+}
+
+std::unordered_map<std::string, std::string> parseQuery(std::string_view qs)
+{
+    std::unordered_map<std::string, std::string> out;
+    size_t pos = 0;
+    while (pos < qs.size()) {
+        const size_t amp = qs.find('&', pos);
+        const std::string_view part = (amp == std::string_view::npos)
+            ? qs.substr(pos)
+            : qs.substr(pos, amp - pos);
+        const size_t eq = part.find('=');
+        if (eq != std::string_view::npos) {
+            out[urlDecode(part.substr(0, eq))] = urlDecode(part.substr(eq + 1));
+        } else if (!part.empty()) {
+            out[urlDecode(part)] = "";
+        }
+        if (amp == std::string_view::npos) break;
+        pos = amp + 1;
+    }
+    return out;
+}
+
+std::vector<std::string> readLogTail(const std::filesystem::path& dataDir, size_t maxLines)
+{
+    std::string raw;
+    if (!grml::readFileBytesW(dataDir / L"grml.log", raw)) return {};
+    std::vector<std::string> lines;
+    size_t pos = 0;
+    while (pos < raw.size()) {
+        size_t eol = raw.find('\n', pos);
+        if (eol == std::string::npos) eol = raw.size();
+        std::string_view line(raw.data() + pos, eol - pos);
+        if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+        if (!line.empty()) lines.emplace_back(line);
+        pos = eol + 1;
+    }
+    if (lines.size() > maxLines) {
+        lines.erase(lines.begin(), lines.begin() + static_cast<ptrdiff_t>(lines.size() - maxLines));
+    }
+    return lines;
+}
+
+std::string readPlaylistsRawJson(const std::filesystem::path& dataDir)
+{
+    std::string raw;
+    if (!grml::readFileBytesW(dataDir / L"grml_playlists.json", raw) || raw.empty()) {
+        return "[]";
+    }
+    const auto parsed = grml::parseJson(raw);
+    if (!parsed || !parsed->isArray()) return "[]";
+    return raw;
+}
+
+std::string readSessionLastSave(const std::filesystem::path& dataDir)
+{
+    std::string raw;
+    if (!grml::readFileBytesW(dataDir / L"grml_session.json", raw)) return {};
+    const auto parsed = grml::parseJson(raw);
+    if (!parsed || !parsed->isObject()) return {};
+    if (const auto* s = parsed->get("last_loaded_save")) {
+        return s->asString();
+    }
+    return {};
+}
+
+std::string toLowerAscii(std::string s)
+{
+    for (char& c : s) {
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + ('a' - 'A'));
+    }
+    return s;
+}
+
+std::string buildSuspectsJson(const std::vector<std::string>& logTail,
+                              const std::string& werJson,
+                              const std::vector<CachedModRef>& mods)
+{
+    struct Suspect {
+        std::string severity;
+        std::string modId;
+        std::string modName;
+        std::string reason;
+        std::string source;
+        std::string faultingModule;
+    };
+    std::vector<Suspect> out;
+    std::vector<std::string> seen;
+
+    auto add = [&](Suspect s) {
+        const std::string k = s.severity + "|" + s.modName + "|" + s.reason;
+        for (const auto& x : seen) if (x == k) return;
+        seen.push_back(k);
+        out.push_back(std::move(s));
+    };
+
+    const std::regex cgRe(R"(\[CrashGuard\]\s+FATAL\s+(0x[0-9A-Fa-f]+)\s+in\s+(\S+)\s+\([^)]+\)\s+->\s+Suspect mod:\s+(\S+)\s+\(([^)]+)\)\s+\[([^\]]+)\])");
+    const std::regex errRe(R"(^\[[^\]]+\]\s+\[(ERROR|FATAL)\]\s+\[([^\]]+)\]\s+(.*)$)");
+
+    for (const auto& line : logTail) {
+        std::smatch m;
+        if (std::regex_search(line, m, cgRe)) {
+            add({"crash", m[4].str(), m[3].str(),
+                 "Unhandled exception " + m[1].str() + " in " + m[2].str(),
+                 "CrashGuard", m[5].str()});
+            continue;
+        }
+        if (std::regex_match(line, m, errRe)) {
+            const std::string sev = (m[1].str() == "FATAL") ? "crash" : "error";
+            const std::string tag = m[2].str();
+            const std::string msg = m[3].str();
+            const std::string msgLo = toLowerAscii(msg);
+            std::string matchedId;
+            std::string matchedName = tag;
+            for (const auto& mod : mods) {
+                const std::string modNameLo = toLowerAscii(mod.name);
+                const std::string modIdLo   = toLowerAscii(mod.id);
+                std::string dllBase = std::filesystem::path(grml::utf8ToWide(mod.dllPath)).filename().string();
+                if ((!modNameLo.empty() && msgLo.find(modNameLo) != std::string::npos) ||
+                    (!modIdLo.empty() && msgLo.find(modIdLo) != std::string::npos) ||
+                    (!dllBase.empty() && msgLo.find(toLowerAscii(dllBase)) != std::string::npos)) {
+                    matchedId   = mod.id;
+                    matchedName = mod.name;
+                    break;
+                }
+            }
+            add({sev, matchedId, matchedName, msg, "grml.log", ""});
+        }
+    }
+
+    const auto wer = grml::parseJson(werJson);
+    if (wer && wer->isObject() && wer->get("found") && wer->get("found")->asBool(false)) {
+        const std::string modName = wer->get("faultingModuleName") ? wer->get("faultingModuleName")->asString() : "";
+        const std::string modPath = wer->get("faultingModulePath") ? wer->get("faultingModulePath")->asString() : "";
+        const std::string excCode = wer->get("exceptionCode") ? wer->get("exceptionCode")->asString() : "";
+        const std::string offset  = wer->get("faultOffset") ? wer->get("faultOffset")->asString() : "";
+        const std::string modNameLo = toLowerAscii(modName);
+        const std::string modPathLo = toLowerAscii(modPath);
+        std::string matchedId;
+        std::string dispName = modName;
+        for (const auto& mod : mods) {
+            const std::string dllBase = toLowerAscii(std::filesystem::path(grml::utf8ToWide(mod.dllPath)).filename().string());
+            if ((!dllBase.empty() && dllBase == modNameLo) ||
+                (!modPathLo.empty() && toLowerAscii(mod.dllPath) == modPathLo)) {
+                matchedId = mod.id;
+                dispName  = mod.name;
+                break;
+            }
+        }
+        add({"crash", matchedId, dispName,
+             "Windows WER: " + excCode + " at " + modName + " +" + offset,
+             "Windows Event Log", modPath.empty() ? modName : modPath});
+    }
+
+    std::string j = "[";
+    for (size_t i = 0; i < out.size(); ++i) {
+        if (i > 0) j += ',';
+        j += "{";
+        j += "\"severity\":\"" + grml::launcher_api::jsonEscape(out[i].severity) + "\",";
+        if (out[i].modId.empty()) j += "\"modId\":null,";
+        else j += "\"modId\":\"" + grml::launcher_api::jsonEscape(out[i].modId) + "\",";
+        j += "\"modName\":\"" + grml::launcher_api::jsonEscape(out[i].modName) + "\",";
+        j += "\"reason\":\"" + grml::launcher_api::jsonEscape(out[i].reason) + "\",";
+        j += "\"source\":\"" + grml::launcher_api::jsonEscape(out[i].source) + "\",";
+        j += "\"faultingModule\":\"" + grml::launcher_api::jsonEscape(out[i].faultingModule) + "\"";
+        j += "}";
+    }
+    j += "]";
+    return j;
+}
+
+void updateCachedModsFromDiscoverJson(const std::string& discoverJson)
+{
+    const auto root = grml::parseJson(discoverJson);
+    if (!root || !root->isObject()) return;
+    const auto* modsArr = root->get("mods");
+    if (!modsArr || !modsArr->isArray()) return;
+    g_cachedMods.clear();
+    for (const auto& item : std::get<grml::JsonArray>(modsArr->data)) {
+        if (!item.isObject()) continue;
+        CachedModRef m;
+        m.id      = item.get("id") ? item.get("id")->asString() : "";
+        m.name    = item.get("name") ? item.get("name")->asString() : "";
+        m.dllPath = item.get("dllPath") ? item.get("dllPath")->asString() : "";
+        if (!m.id.empty()) g_cachedMods.push_back(std::move(m));
+    }
+}
+
+void sendHttpResponse(SOCKET sock, int statusCode, const char* statusText,
+                      std::string_view contentType, std::string_view body)
+{
+    char hdr[512]{};
+    const int hdrLen = std::snprintf(
+        hdr, sizeof(hdr),
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: %.*s\r\n"
+        "Content-Length: %zu\r\n"
+        "Cache-Control: no-store\r\n"
+        "Connection: close\r\n\r\n",
+        statusCode, statusText,
+        static_cast<int>(contentType.size()), contentType.data(),
+        body.size());
+    send(sock, hdr, hdrLen, 0);
+    size_t sent = 0;
+    while (sent < body.size()) {
+        const int chunk = static_cast<int>(std::min<size_t>(body.size() - sent, 65536));
+        const int n = send(sock, body.data() + sent, chunk, 0);
+        if (n <= 0) break;
+        sent += static_cast<size_t>(n);
+    }
+}
+
+void handleClient(SOCKET client)
+{
+    std::string reqBuf;
+    reqBuf.reserve(4096);
+    char tmp[4096];
+    size_t headerEnd = std::string::npos;
+    for (;;) {
+        const int n = recv(client, tmp, sizeof(tmp), 0);
+        if (n <= 0) break;
+        reqBuf.append(tmp, static_cast<size_t>(n));
+        headerEnd = reqBuf.find("\r\n\r\n");
+        if (headerEnd != std::string::npos) break;
+        if (reqBuf.size() > 1024 * 1024) break;
+    }
+    if (headerEnd == std::string::npos) {
+        closesocket(client);
+        return;
+    }
+
+    const std::string_view hdrView(reqBuf.data(), headerEnd);
+    const size_t firstEol = hdrView.find("\r\n");
+    const std::string_view reqLine = (firstEol == std::string_view::npos) ? hdrView : hdrView.substr(0, firstEol);
+
+    const size_t sp1 = reqLine.find(' ');
+    const size_t sp2 = (sp1 != std::string_view::npos) ? reqLine.find(' ', sp1 + 1) : std::string_view::npos;
+    if (sp1 == std::string_view::npos || sp2 == std::string_view::npos) {
+        sendHttpResponse(client, 400, "Bad Request", "text/plain", "Bad Request");
+        closesocket(client);
+        return;
+    }
+
+    const std::string method(reqLine.substr(0, sp1));
+    const std::string_view target = reqLine.substr(sp1 + 1, sp2 - (sp1 + 1));
+    const size_t qPos = target.find('?');
+    const std::string path(qPos == std::string_view::npos ? target : target.substr(0, qPos));
+    const auto query = parseQuery(qPos == std::string_view::npos ? std::string_view{} : target.substr(qPos + 1));
+
+    size_t contentLength = 0;
+    {
+        const std::string hdrLo = toLowerAscii(std::string(hdrView));
+        const size_t clPos = hdrLo.find("content-length:");
+        if (clPos != std::string::npos) {
+            contentLength = static_cast<size_t>(std::strtoull(hdrLo.c_str() + clPos + 15, nullptr, 10));
+        }
+    }
+    std::string body = reqBuf.substr(headerEnd + 4);
+    while (body.size() < contentLength && body.size() < 4 * 1024 * 1024) {
+        const int n = recv(client, tmp, sizeof(tmp), 0);
+        if (n <= 0) break;
+        body.append(tmp, static_cast<size_t>(n));
+    }
+    if (body.size() > contentLength && contentLength > 0) {
+        body.resize(contentLength);
+    }
+
+    const std::filesystem::path dataDir = grml::getAppDataDir(g_loaderDir);
+
+    if (method == "GET" && path == "/api/state") {
+        std::lock_guard lock(g_apiMutex);
+        const auto it = query.find("game");
+        const std::filesystem::path gameOverride = (it != query.end())
+            ? std::filesystem::path(grml::utf8ToWide(it->second))
+            : std::filesystem::path{};
+        const std::string discoverJson = grml::launcher_api::buildDiscoverJson(g_loaderDir, gameOverride);
+        updateCachedModsFromDiscoverJson(discoverJson);
+
+        const auto logs = readLogTail(dataDir, 250);
+        std::string logJson = "[";
+        for (size_t i = 0; i < logs.size(); ++i) {
+            if (i > 0) logJson += ',';
+            logJson += "\"" + grml::launcher_api::jsonEscape(logs[i]) + "\"";
+        }
+        logJson += "]";
+
+        // Parse grmlIni and vfs slices from discoverJson via json_min or extract top-level keys
+        // Since discoverJson already contains "grmlIni" and "vfs", embed discovery and let JS/extract read them,
+        // OR extract raw slices cleanly:
+        const std::string playlistsJson = readPlaylistsRawJson(dataDir);
+        const std::string resp =
+            "{\"discovery\":" + discoverJson +
+            ",\"logTail\":" + logJson +
+            ",\"playlists\":" + playlistsJson + "}";
+        sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8", resp);
+    } else if (method == "GET" && path == "/api/saves") {
+        std::lock_guard lock(g_apiMutex);
+        const auto it = query.find("game");
+        const std::filesystem::path gameOverride = (it != query.end())
+            ? std::filesystem::path(grml::utf8ToWide(it->second))
+            : std::filesystem::path{};
+        const std::string savesJson = grml::launcher_api::buildInspectSavesJson(g_loaderDir, gameOverride);
+        sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8", savesJson);
+    } else if (method == "GET" && path == "/api/diagnostics") {
+        std::lock_guard lock(g_apiMutex);
+        const bool checkEvents  = query.count("checkEvents") && query.at("checkEvents") == "1";
+        const bool checkProcess = checkEvents || (query.count("checkProcess") && query.at("checkProcess") == "1");
+        const auto logs = readLogTail(dataDir, 250);
+        std::vector<uint32_t> pids;
+        if (checkProcess) pids = grml::launcher_api::getRunningSovietPids();
+        const bool running = !pids.empty();
+        bool lastPidAlive = false;
+        for (uint32_t p : pids) if (p == g_lastLaunchPid) lastPidAlive = true;
+        const bool exitedAfterLaunch = checkProcess && g_lastLaunchPid != 0 && !lastPidAlive &&
+                                       ((nowMs() - g_lastLaunchMs) < 120000);
+        bool hasCrashGuard = false;
+        for (const auto& l : logs) if (l.find("[CrashGuard]") != std::string::npos) { hasCrashGuard = true; break; }
+        std::string werJson = "{\"found\":false}";
+        if (checkEvents || (exitedAfterLaunch && !hasCrashGuard)) {
+            werJson = grml::launcher_api::buildCrashEventsJson();
+        }
+        const bool crashDetected = hasCrashGuard || exitedAfterLaunch || (werJson.find("\"found\":true") != std::string::npos);
+        const std::string lastSave = crashDetected ? readSessionLastSave(dataDir) : std::string{};
+        const std::string suspects = buildSuspectsJson(logs, werJson, g_cachedMods);
+
+        SYSTEMTIME st{};
+        GetLocalTime(&st);
+        char timeBuf[32]{};
+        std::snprintf(timeBuf, sizeof(timeBuf), "%02u:%02u:%02u", st.wHour, st.wMinute, st.wSecond);
+
+        std::string pidsJson = "[";
+        for (size_t i = 0; i < pids.size(); ++i) {
+            if (i > 0) pidsJson += ',';
+            pidsJson += std::to_string(pids[i]);
+        }
+        pidsJson += "]";
+
+        std::string logJson = "[";
+        for (size_t i = 0; i < logs.size(); ++i) {
+            if (i > 0) logJson += ',';
+            logJson += "\"" + grml::launcher_api::jsonEscape(logs[i]) + "\"";
+        }
+        logJson += "]";
+
+        std::string resp = "{";
+        resp += "\"running\":" + std::string(running ? "true" : "false") + ",";
+        resp += "\"pids\":" + pidsJson + ",";
+        resp += "\"lastLaunchPid\":" + (g_lastLaunchPid ? std::to_string(g_lastLaunchPid) : "null") + ",";
+        resp += "\"exitedUnexpectedly\":" + std::string(exitedAfterLaunch ? "true" : "false") + ",";
+        resp += "\"crashDetected\":" + std::string(crashDetected ? "true" : "false") + ",";
+        resp += "\"lastLoadedSave\":\"" + grml::launcher_api::jsonEscape(lastSave) + "\",";
+        resp += "\"logTail\":" + logJson + ",";
+        resp += "\"suspects\":" + suspects + ",";
+        resp += "\"werCrash\":" + (werJson.find("\"found\":true") != std::string::npos ? werJson : "null") + ",";
+        resp += "\"checkedAt\":\"" + std::string(timeBuf) + "\"";
+        resp += "}";
+        sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8", resp);
+    } else if (method == "POST" && path == "/api/config") {
+        std::lock_guard lock(g_apiMutex);
+        std::string outJson;
+        const bool ok = grml::launcher_api::saveConfigFromJson(g_loaderDir, body, outJson);
+        sendHttpResponse(client, ok ? 200 : 500, ok ? "OK" : "Error", "application/json; charset=utf-8", outJson);
+    } else if (method == "POST" && path == "/api/vfs") {
+        std::lock_guard lock(g_apiMutex);
+        std::string outJson;
+        const bool ok = grml::launcher_api::saveVfsFromJson(g_loaderDir, body, outJson);
+        sendHttpResponse(client, ok ? 200 : 500, ok ? "OK" : "Error", "application/json; charset=utf-8", outJson);
+    } else if (method == "GET" && path == "/api/mod-ini") {
+        std::lock_guard lock(g_apiMutex);
+        const auto it = query.find("iniPath");
+        const std::filesystem::path iniPath = (it != query.end())
+            ? std::filesystem::path(grml::utf8ToWide(it->second))
+            : std::filesystem::path{};
+        sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8", grml::launcher_api::readIniJson(iniPath));
+    } else if (method == "POST" && path == "/api/mod-ini") {
+        std::lock_guard lock(g_apiMutex);
+        std::string outJson;
+        const bool ok = grml::launcher_api::saveIniFromJson(body, outJson);
+        sendHttpResponse(client, ok ? 200 : 500, ok ? "OK" : "Error", "application/json; charset=utf-8", outJson);
+    } else if (method == "POST" && path == "/api/generate-schema") {
+        std::lock_guard lock(g_apiMutex);
+        std::string outJson;
+        const bool ok = grml::launcher_api::generateSchemaFromJson(body, outJson);
+        sendHttpResponse(client, ok ? 200 : 500, ok ? "OK" : "Error", "application/json; charset=utf-8", outJson);
+    } else if (method == "GET" && path == "/api/mod-image") {
+        const auto it = query.find("path");
+        const std::string imgPath = (it != query.end()) ? it->second : "";
+        const std::string lo = toLowerAscii(imgPath);
+        const char* mime = nullptr;
+        if (lo.ends_with(".png")) mime = "image/png";
+        else if (lo.ends_with(".webp")) mime = "image/webp";
+        else if (lo.ends_with(".jpg") || lo.ends_with(".jpeg")) mime = "image/jpeg";
+        std::string bytes;
+        if (!mime || !grml::readFileBytesW(grml::utf8ToWide(imgPath), bytes)) {
+            sendHttpResponse(client, 404, "Not Found", "text/plain", "Not Found");
+        } else {
+            sendHttpResponse(client, 200, "OK", mime, bytes);
+        }
+    } else if (method == "GET" && path == "/api/browse-game") {
+        const auto it = query.find("current");
+        std::wstring initialDir;
+        if (it != query.end() && !it->second.empty()) {
+            const std::filesystem::path p = grml::utf8ToWide(it->second);
+            if (std::filesystem::exists(p.parent_path())) {
+                initialDir = p.parent_path().wstring();
+            }
+        }
+        wchar_t fileBuf[MAX_PATH * 4]{};
+        OPENFILENAMEW ofn{};
+        ofn.lStructSize     = sizeof(ofn);
+        ofn.lpstrFilter     = L"SOVIET64.exe\0SOVIET64.exe\0Executables (*.exe)\0*.exe\0All Files\0*.*\0";
+        ofn.lpstrFile       = fileBuf;
+        ofn.nMaxFile        = _countof(fileBuf);
+        ofn.lpstrInitialDir = initialDir.empty() ? nullptr : initialDir.c_str();
+        ofn.lpstrTitle      = L"Locate SOVIET64.exe";
+        ofn.Flags           = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+        if (GetOpenFileNameW(&ofn)) {
+            const std::string chosen = grml::wideToUtf8(fileBuf);
+            sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8",
+                             "{\"ok\":true,\"path\":\"" + grml::launcher_api::jsonEscape(chosen) + "\"}");
+        } else {
+            sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8", "{\"ok\":false,\"cancelled\":true}");
+        }
+    } else if (method == "POST" && path == "/api/open-url") {
+        const auto root = grml::parseJson(body);
+        const std::string openUrl = (root && root->get("url")) ? root->get("url")->asString() : "";
+        if (openUrl.rfind("https://steamcommunity.com/", 0) != 0 &&
+            openUrl.rfind("steam://url/CommunityFilePage/", 0) != 0) {
+            sendHttpResponse(client, 400, "Bad Request", "application/json", "{\"ok\":false,\"error\":\"Unsupported URL\"}");
+        } else {
+            ShellExecuteW(nullptr, L"open", grml::utf8ToWide(openUrl).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            sendHttpResponse(client, 200, "OK", "application/json", "{\"ok\":true}");
+        }
+    } else if (method == "POST" && path == "/api/playlists") {
+        std::lock_guard lock(g_apiMutex);
+        const auto req = grml::parseJson(body);
+        const std::string action = (req && req->get("action")) ? req->get("action")->asString() : "";
+        const std::string name   = (req && req->get("name")) ? req->get("name")->asString() : "";
+        const auto existing = grml::parseJson(readPlaylistsRawJson(dataDir));
+        std::vector<std::pair<std::string, std::vector<std::string>>> items;
+        if (existing && existing->isArray()) {
+            for (const auto& el : std::get<grml::JsonArray>(existing->data)) {
+                if (!el.isObject()) continue;
+                const std::string n = el.get("name") ? el.get("name")->asString() : "";
+                if (n.empty() || n == name) continue;
+                const auto ids = el.get("enabledIds") ? el.get("enabledIds")->asStringArray() : std::vector<std::string>{};
+                items.emplace_back(n, ids);
+            }
+        }
+        if (action != "delete" && !name.empty()) {
+            const auto ids = (req && req->get("enabledIds")) ? req->get("enabledIds")->asStringArray() : std::vector<std::string>{};
+            items.emplace_back(name, ids);
+        }
+        std::string out = "[\n";
+        for (size_t i = 0; i < items.size(); ++i) {
+            if (i > 0) out += ",\n";
+            out += "  {\"name\":\"" + grml::launcher_api::jsonEscape(items[i].first) + "\",\"enabledIds\":[";
+            for (size_t j = 0; j < items[i].second.size(); ++j) {
+                if (j > 0) out += ',';
+                out += "\"" + grml::launcher_api::jsonEscape(items[i].second[j]) + "\"";
+            }
+            out += "]}";
+        }
+        out += "\n]\n";
+        grml::writeFileBytesW(dataDir / L"grml_playlists.json", out);
+        sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8", "{\"ok\":true,\"playlists\":" + out + "}");
+    } else if (method == "POST" && path == "/api/launch") {
+        std::lock_guard lock(g_apiMutex);
+        DeleteFileW((dataDir / L"grml_session.json").c_str());
+        const auto req = grml::parseJson(body);
+        const std::filesystem::path gameExe = (req && req->get("gameExe"))
+            ? std::filesystem::path(grml::utf8ToWide(req->get("gameExe")->asString()))
+            : std::filesystem::path{};
+        const auto res = grml::launcher_api::launchGame(g_loaderDir, gameExe);
+        if (res.ok && res.processId != 0) {
+            g_lastLaunchPid = res.processId;
+            g_lastLaunchMs  = nowMs();
+        }
+        sendHttpResponse(client, res.ok ? 200 : 500, res.ok ? "OK" : "Error",
+                         "application/json; charset=utf-8", res.json);
+    } else if (method == "GET") {
+        const std::string lookup = (path == "/") ? "/index.html" : path;
+        const auto assets = grml::generated::embeddedUiAssets();
+        const grml::generated::EmbeddedUiAsset* matched  = nullptr;
+        const grml::generated::EmbeddedUiAsset* fallback = nullptr;
+        for (const auto& a : assets) {
+            if (lookup == a.urlPath) { matched = &a; break; }
+            if (std::strcmp(a.urlPath, "/index.html") == 0) fallback = &a;
+        }
+        const auto* chosen = matched ? matched : fallback;
+        if (!chosen) {
+            sendHttpResponse(client, 404, "Not Found", "text/plain", "UI assets not embedded");
+        } else {
+            sendHttpResponse(client, 200, "OK", chosen->mimeType,
+                             std::string_view(reinterpret_cast<const char*>(chosen->data), chosen->size));
+        }
+    } else {
+        sendHttpResponse(client, 404, "Not Found", "text/plain", "Not Found");
+    }
+
+    closesocket(client);
+}
+
+void acceptLoop()
+{
+    while (g_running.load(std::memory_order_relaxed)) {
+        SOCKET client = accept(g_listenSock, nullptr, nullptr);
+        if (client == INVALID_SOCKET) break;
+        std::thread(handleClient, client).detach();
+    }
+}
+
+} // namespace
+
+bool start(const std::filesystem::path& loaderDir, uint16_t& outPort)
+{
+    WSADATA wsa{};
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return false;
+
+    g_loaderDir = loaderDir;
+    g_listenSock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (g_listenSock == INVALID_SOCKET) return false;
+
+    sockaddr_in addr{};
+    addr.sin_family      = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port        = 0;
+    if (bind(g_listenSock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == SOCKET_ERROR) {
+        closesocket(g_listenSock);
+        g_listenSock = INVALID_SOCKET;
+        return false;
+    }
+    if (listen(g_listenSock, SOMAXCONN) == SOCKET_ERROR) {
+        closesocket(g_listenSock);
+        g_listenSock = INVALID_SOCKET;
+        return false;
+    }
+
+    int len = sizeof(addr);
+    getsockname(g_listenSock, reinterpret_cast<sockaddr*>(&addr), &len);
+    outPort = ntohs(addr.sin_port);
+
+    g_running.store(true, std::memory_order_relaxed);
+    g_acceptThread = std::thread(acceptLoop);
+    return true;
+}
+
+void stop()
+{
+    g_running.store(false, std::memory_order_relaxed);
+    if (g_listenSock != INVALID_SOCKET) {
+        closesocket(g_listenSock);
+        g_listenSock = INVALID_SOCKET;
+    }
+    if (g_acceptThread.joinable()) {
+        g_acceptThread.join();
+    }
+    WSACleanup();
+}
+
+} // namespace grml::http_server

@@ -35,7 +35,7 @@ Before submitting a PR:
    ```
 2. **Deno Desktop Type-Check & Bundle:**
    ```powershell
-   cd launcher-ui
+   cd src/launcher-ui
    deno check main.ts
    deno task build
    ```

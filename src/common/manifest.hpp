@@ -24,6 +24,7 @@ struct DiscoveredPlugin {
     std::string               description;
     std::filesystem::path     dllPath;
     std::filesystem::path     manifestPath;
+    std::filesystem::path     imagePath;
     std::filesystem::path     sourceRoot;
     std::string               workshopId;
     std::string               sha256;
@@ -44,10 +45,15 @@ struct DiscoveredPlugin {
     std::vector<std::string>  conflictsWith;
     std::vector<std::string>  loadAfter;
     std::vector<std::string>  loadBefore;
+    std::vector<std::string>  supportedGameVersions;
 
     std::string               warning;
     bool                      blockedByDependencyOrConflict{false};
 };
+
+// Returns true if the plugin declares support for `gameVersion` (or leaves
+// supportedGameVersions empty / gameVersion is unknown).
+bool isGameVersionSupported(const DiscoveredPlugin& p, std::string_view gameVersion) noexcept;
 
 struct DiscoveryResult {
     std::vector<DiscoveredPlugin> plugins;

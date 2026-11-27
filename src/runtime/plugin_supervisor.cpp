@@ -422,12 +422,29 @@ uintptr_t resolveResourceGet(const std::string& anchorStr)
     return 0;
 }
 
-uint16_t parseHotkeyVk(const std::string& name)
+uint16_t parseHotkeyVk(const std::string& rawName)
 {
-    if (name == "F8") return VK_F8;
-    if (name == "F10") return VK_F10;
-    if (name == "F11") return VK_F11;
-    if (name == "F12") return VK_F12;
+    std::string up;
+    up.reserve(rawName.size());
+    for (char c : rawName) {
+        if (c == ' ' || c == '\t' || c == '_') continue;
+        up.push_back((c >= 'a' && c <= 'z') ? static_cast<char>(c - ('a' - 'A')) : c);
+    }
+    if (up.size() >= 2 && up[0] == 'F') {
+        const int n = std::atoi(up.c_str() + 1);
+        if (n >= 1 && n <= 12) return static_cast<uint16_t>(VK_F1 + (n - 1));
+    }
+    if (up == "INSERT" || up == "INS") return VK_INSERT;
+    if (up == "HOME") return VK_HOME;
+    if (up == "END") return VK_END;
+    if (up == "PAGEUP" || up == "PGUP") return VK_PRIOR;
+    if (up == "PAGEDOWN" || up == "PGDN") return VK_NEXT;
+    if (up == "PAUSE") return VK_PAUSE;
+    if (up == "SCROLLLOCK") return VK_SCROLL;
+    if (up == "TILDE" || up == "`" || up == "~") return VK_OEM_3;
+    if (up.size() == 1 && ((up[0] >= 'A' && up[0] <= 'Z') || (up[0] >= '0' && up[0] <= '9'))) {
+        return static_cast<uint16_t>(up[0]);
+    }
     return VK_F9;
 }
 
@@ -438,7 +455,8 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
     if (g_bootstrapped.exchange(true)) return true;
 
     g_loaderRoot = loaderRootDir;
-    logger::init(g_loaderRoot / L"grml.log");
+    const std::filesystem::path dataRoot = getAppDataDir(g_loaderRoot);
+    logger::init(dataRoot / L"grml.log");
     logger::logMessage(GRML_LOG_INFO, "Core", "Glorious Republic Mod Loader (GRML v%s) starting...",
                        GRML_BUILD_VERSION);
 
@@ -469,21 +487,24 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
                        g_gameVersion.c_str(), g_gamePe.timeDateStamp, g_gamePe.imageSize,
                        g_gameSha256.empty() ? "(unavailable)" : g_gameSha256.c_str());
 
-    // Load grml.ini
+    // Load grml.ini from AppData\Local\GRML
     IniFile grmlIni;
-    const auto grmlIniPath = g_loaderRoot / L"grml.ini";
+    const auto grmlIniPath = dataRoot / L"grml.ini";
     if (!grmlIni.loadFromFile(grmlIniPath)) {
         logger::logMessage(GRML_LOG_INFO, "Config", "No grml.ini found; using defaults");
     }
 
-    const std::filesystem::path pluginsDir = g_loaderRoot / L"plugins";
+    const std::filesystem::path pluginsDir =
+        (_wcsicmp(g_loaderRoot.filename().c_str(), L"core") == 0 && g_loaderRoot.has_parent_path())
+            ? g_loaderRoot.parent_path() / L"plugins"
+            : g_loaderRoot / L"plugins";
     overlay::setPluginsDirectory(pluginsDir);
 
     // Install centralized hooks, CrashGuard, Media VFS & DX11 F9 hub
     g_prevExceptionFilter = SetUnhandledExceptionFilter(&grmlUnhandledExceptionFilter);
     g_hostApi.ui = overlay::uiApi();
-    vfs_redirect::install(g_loaderRoot, g_gameExePath.parent_path());
-    save_events::install();
+    vfs_redirect::install(dataRoot, g_gameExePath.parent_path());
+    save_events::install(dataRoot);
     overlay::install(parseHotkeyVk(grmlIni.getString("general", "overlay_hotkey", "F9")));
 
     // Resolve wrsr.resource_get & prepare Tesmio/RML compatibility host

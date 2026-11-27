@@ -1395,7 +1395,31 @@ void renderUI()
 
     ImGui::SetNextWindowSize(ImVec2(660.f, 440.f), ImGuiCond_FirstUseEver);
     bool open = true;
-    const bool windowOpen = ImGui::Begin("GRML Mod Settings [F9]###GRML_ModSettings", &open, ImGuiWindowFlags_NoCollapse);
+    char titleBuf[64]{};
+    const uint16_t curVk = g_toggleVk.load(std::memory_order_relaxed);
+    if (curVk >= VK_F1 && curVk <= VK_F12) {
+        std::snprintf(titleBuf, sizeof(titleBuf), "GRML Mod Settings [F%u]###GRML_ModSettings",
+                      static_cast<unsigned>(curVk - VK_F1 + 1));
+    } else if (curVk == VK_INSERT) {
+        std::snprintf(titleBuf, sizeof(titleBuf), "GRML Mod Settings [Insert]###GRML_ModSettings");
+    } else if (curVk == VK_HOME) {
+        std::snprintf(titleBuf, sizeof(titleBuf), "GRML Mod Settings [Home]###GRML_ModSettings");
+    } else if (curVk == VK_END) {
+        std::snprintf(titleBuf, sizeof(titleBuf), "GRML Mod Settings [End]###GRML_ModSettings");
+    } else if (curVk == VK_PRIOR) {
+        std::snprintf(titleBuf, sizeof(titleBuf), "GRML Mod Settings [PageUp]###GRML_ModSettings");
+    } else if (curVk == VK_NEXT) {
+        std::snprintf(titleBuf, sizeof(titleBuf), "GRML Mod Settings [PageDown]###GRML_ModSettings");
+    } else if (curVk == VK_PAUSE) {
+        std::snprintf(titleBuf, sizeof(titleBuf), "GRML Mod Settings [Pause]###GRML_ModSettings");
+    } else if (curVk == VK_OEM_3) {
+        std::snprintf(titleBuf, sizeof(titleBuf), "GRML Mod Settings [~]###GRML_ModSettings");
+    } else if ((curVk >= 'A' && curVk <= 'Z') || (curVk >= '0' && curVk <= '9')) {
+        std::snprintf(titleBuf, sizeof(titleBuf), "GRML Mod Settings [%c]###GRML_ModSettings", static_cast<char>(curVk));
+    } else {
+        std::snprintf(titleBuf, sizeof(titleBuf), "GRML Mod Settings [F9]###GRML_ModSettings");
+    }
+    const bool windowOpen = ImGui::Begin(titleBuf, &open, ImGuiWindowFlags_NoCollapse);
     {
         const ImVec2 pos  = ImGui::GetWindowPos();
         const ImVec2 size = ImGui::GetWindowSize();

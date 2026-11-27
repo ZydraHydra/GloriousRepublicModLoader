@@ -48,6 +48,9 @@ std::string  wideToUtf8(std::wstring_view w);
 bool readFileBytesW(const std::filesystem::path& path, std::string& outBytes);
 bool writeFileBytesW(const std::filesystem::path& path, std::string_view bytes);
 
+// Resolves %LOCALAPPDATA%\GRML (creating it if needed), falling back to fallbackDir.
+std::filesystem::path getAppDataDir(const std::filesystem::path& fallbackDir = {});
+
 struct IniKeyUpdate {
     std::string section;
     std::string key;

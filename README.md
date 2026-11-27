@@ -53,7 +53,7 @@ cmake --build build\release -j
 
 ### 2. Build the Deno Desktop Launcher (`GloriousRepublicModLoader.exe`)
 ```powershell
-cd launcher-ui
+cd src/launcher-ui
 deno check main.ts
 deno task build
 ```
@@ -70,7 +70,7 @@ All release outputs are staged in `build\release\bin\`.
 ├── config/                            # Default grml.ini & grml_offsets.ini
 ├── docs/                              # Architecture, SDK, UI Schema & Hooking rules
 ├── include/grml_api.h                 # Canonical pure-C host/plugin ABI
-├── launcher-ui/                       # Deno Desktop frontend + thin HTTP bridge
+├── src/launcher-ui/                   # Deno Desktop frontend + thin HTTP bridge
 ├── scripts/fetch_references.ps1       # Optional upstream RML reference fetcher
 ├── src/
 │   ├── common/                        # PE/AOB scanner, INI, JSON, Manifest, UI Schema, VFS

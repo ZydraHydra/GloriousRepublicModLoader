@@ -1,0 +1,3 @@
+#include "resource.h"
+
+IDI_ICON1 ICON "../../src/launcher-ui/web/static/logo.ico"

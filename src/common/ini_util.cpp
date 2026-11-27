@@ -450,4 +450,17 @@ bool updateIniFilePreservingComments(const std::filesystem::path& path,
     return writeFileBytesW(path, out);
 }
 
+std::filesystem::path getAppDataDir(const std::filesystem::path& fallbackDir)
+{
+    wchar_t buf[MAX_PATH * 4]{};
+    const DWORD len = GetEnvironmentVariableW(L"LOCALAPPDATA", buf, _countof(buf));
+    if (len > 0 && len < _countof(buf)) {
+        std::filesystem::path dir = std::filesystem::path(buf, buf + len) / L"GRML";
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        return dir;
+    }
+    return fallbackDir;
+}
+
 } // namespace grml

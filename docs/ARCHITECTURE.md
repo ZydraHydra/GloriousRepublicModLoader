@@ -4,7 +4,7 @@ GRML splits responsibilities cleanly between a thin desktop UI, a native Win32 C
 
 ```text
 GloriousRepublicModLoader.exe (Deno Desktop + WebView2)
-   │  Thin HTTP + static UI bridge (launcher-ui/main.ts + ui/*)
+   │  Thin HTTP + static UI bridge (src/launcher-ui/main.ts + ui/*)
    ▼  stdin/stdout JSON (SUBSYSTEM:WINDOWS, zero console popups)
 grml_injector.exe (src/launcher/)
    │  • Discovery: plugins, manifests, topo-sort, UI schemas, Media VFS

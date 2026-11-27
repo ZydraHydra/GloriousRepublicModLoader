@@ -20,6 +20,7 @@ imgui.ini
 grml_playlists.json
 
 # IDE & CMake caches
+.cache/
 .vs/
 .vscode/
 *.user
@@ -30,4 +31,6 @@ cmake_install.cmake
 install_manifest.txt
 .ninja_deps
 .ninja_log
-launcher-ui/node_modules/
+node_modules/
+.svelte-kit/
+src/launcher-ui/dist/

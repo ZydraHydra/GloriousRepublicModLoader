@@ -6,10 +6,14 @@
 #include <MinHook.h>
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstdio>
 #include <cwctype>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace grml::save_events {
@@ -36,6 +40,115 @@ std::wstring     g_activeSaveDir;
 std::atomic<bool> g_wasInGame{false};
 std::atomic<bool> g_installed{false};
 void*             g_hookTarget = nullptr;
+
+std::filesystem::path   g_sessionJsonPath;
+std::mutex              g_sessionMutex;
+std::condition_variable g_sessionCv;
+std::thread             g_sessionThread;
+bool                    g_sessionStop = false;
+bool                    g_sessionDirty = false;
+std::wstring            g_pendingSaveName;
+std::wstring            g_pendingSavePath;
+
+std::string wideToUtf8Local(std::wstring_view w)
+{
+    if (w.empty()) return {};
+    const int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
+    if (n <= 0) return {};
+    std::string out(static_cast<size_t>(n), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), out.data(), n, nullptr, nullptr);
+    return out;
+}
+
+std::string jsonEscapeLocal(std::string_view s)
+{
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (char c : s) {
+        switch (c) {
+        case '"':  out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default:   out += c; break;
+        }
+    }
+    return out;
+}
+
+std::string currentUtcIso8601()
+{
+    SYSTEMTIME st{};
+    GetSystemTime(&st);
+    char buf[32]{};
+    std::snprintf(buf, sizeof(buf), "%04u-%02u-%02uT%02u:%02u:%02uZ",
+                  st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    return buf;
+}
+
+void writeSessionJsonFile(const std::filesystem::path& outPath,
+                          const std::wstring& saveName,
+                          const std::wstring& savePath)
+{
+    if (outPath.empty()) return;
+    const std::string nameUtf8 = jsonEscapeLocal(wideToUtf8Local(saveName));
+    const std::string pathUtf8 = jsonEscapeLocal(wideToUtf8Local(savePath));
+    const std::string tsUtc    = currentUtcIso8601();
+    const DWORD pid            = GetCurrentProcessId();
+
+    std::string json = "{\n";
+    json += "  \"last_loaded_save\": \"" + nameUtf8 + "\",\n";
+    json += "  \"last_loaded_save_path\": \"" + pathUtf8 + "\",\n";
+    json += "  \"timestamp_utc\": \"" + tsUtc + "\",\n";
+    json += "  \"pid\": " + std::to_string(pid) + "\n";
+    json += "}\n";
+
+    std::filesystem::path tmpPath = outPath;
+    tmpPath += L".tmp";
+    HANDLE hf = CreateFileW(tmpPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hf == INVALID_HANDLE_VALUE) return;
+    DWORD written = 0;
+    const BOOL ok = WriteFile(hf, json.data(), static_cast<DWORD>(json.size()), &written, nullptr);
+    CloseHandle(hf);
+    if (ok && written == json.size()) {
+        MoveFileExW(tmpPath.c_str(), outPath.c_str(), MOVEFILE_REPLACE_EXISTING);
+    } else {
+        DeleteFileW(tmpPath.c_str());
+    }
+}
+
+void sessionWriterThreadProc()
+{
+    for (;;) {
+        std::wstring saveName;
+        std::wstring savePath;
+        {
+            std::unique_lock lock(g_sessionMutex);
+            g_sessionCv.wait(lock, [] { return g_sessionStop || g_sessionDirty; });
+            if (g_sessionStop && !g_sessionDirty) break;
+            g_sessionDirty = false;
+            saveName = g_pendingSaveName;
+            savePath = g_pendingSavePath;
+        }
+        writeSessionJsonFile(g_sessionJsonPath, saveName, savePath);
+    }
+}
+
+void queueSessionBreadcrumb(const std::wstring& saveDir)
+{
+    if (g_sessionJsonPath.empty() || saveDir.empty()) return;
+    const std::wstring saveName = std::filesystem::path(saveDir).filename().wstring();
+    if (saveName.empty()) return;
+    {
+        std::lock_guard lock(g_sessionMutex);
+        g_pendingSaveName = saveName;
+        g_pendingSavePath = saveDir;
+        g_sessionDirty    = true;
+    }
+    g_sessionCv.notify_one();
+}
 
 using PFN_CreateFileW = HANDLE(WINAPI*)(LPCWSTR, DWORD, DWORD,
                                         LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
@@ -178,18 +291,27 @@ HANDLE WINAPI detourCreateFileW(LPCWSTR               lpFileName,
     // Zero-alloc hot-path filter: ignore >99.9% of file opens immediately
     const std::wstring_view pathView(lpFileName);
     const bool isWrite = (dwDesiredAccess & (GENERIC_WRITE | FILE_WRITE_DATA | FILE_APPEND_DATA)) != 0;
+    const bool isHeader = endsWithFileNameNoAlloc(pathView, L"header.bin");
+    const bool isBuildings = !isWrite && !isHeader && endsWithFileNameNoAlloc(pathView, L"buildings.bin");
     if (isWrite) {
-        if (!endsWithFileNameNoAlloc(pathView, L"header.bin")) {
+        if (!isHeader) {
             return h;
         }
     } else {
-        if (!endsWithFileNameNoAlloc(pathView, L"buildings.bin")) {
+        if (!isHeader && !isBuildings) {
             return h;
         }
     }
 
     const std::wstring saveDir = extractSaveDir(pathView);
     if (saveDir.empty()) {
+        return h;
+    }
+
+    if (!isWrite && isHeader) {
+        t_inHook = true;
+        queueSessionBreadcrumb(saveDir);
+        t_inHook = false;
         return h;
     }
 
@@ -223,10 +345,20 @@ HANDLE WINAPI detourCreateFileW(LPCWSTR               lpFileName,
 
 } // namespace
 
-bool install()
+bool install(const std::filesystem::path& loaderDir)
 {
     if (g_installed.exchange(true)) {
         return true;
+    }
+
+    if (!loaderDir.empty()) {
+        g_sessionJsonPath = loaderDir / L"grml_session.json";
+        {
+            std::lock_guard lock(g_sessionMutex);
+            g_sessionStop  = false;
+            g_sessionDirty = false;
+        }
+        g_sessionThread = std::thread(sessionWriterThreadProc);
     }
 
     const MH_STATUS initStatus = MH_Initialize();
@@ -263,6 +395,14 @@ void shutdown()
         MH_DisableHook(g_hookTarget);
         MH_RemoveHook(g_hookTarget);
         g_hookTarget = nullptr;
+    }
+    if (g_sessionThread.joinable()) {
+        {
+            std::lock_guard lock(g_sessionMutex);
+            g_sessionStop = true;
+        }
+        g_sessionCv.notify_all();
+        g_sessionThread.join();
     }
 }
 
