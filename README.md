@@ -101,7 +101,7 @@ This builds the SvelteKit static UI (`src/launcher/ui/`), compiles `GloriousRepu
 ├── src/
 │   ├── common/                        # PE/AOB scanner, INI, JSON, Manifest, UI Schema, VFS
 │   ├── launcher/                      # Native Win32 + WebView2 host, HTTP API, injector
-│   │   └── ui/                        # Svelte 5 + SvelteKit static UI + reusable components
+│   │   └── ui/                        # Svelte 5 + SvelteKit UI sources (lib/, routes/, static/)
 │   └── runtime/                       # grml_runtime.dll (F9 hub, CrashGuard, VFS, Compat)
 ├── build.ps1                          # Full clean build script -> build\release\
 ├── CMakeLists.txt

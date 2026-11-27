@@ -1,6 +1,6 @@
 function(grml_embed_ui_assets target_name dist_dir)
     if(NOT EXISTS "${dist_dir}/index.html")
-        message(FATAL_ERROR "grml_embed_ui_assets: dist/index.html not found in ${dist_dir}. Run 'npm run build' in src/launcher/ui first.")
+        message(FATAL_ERROR "grml_embed_ui_assets: dist/index.html not found in ${dist_dir}. Run 'npm run build' in the repo root first.")
     endif()
 
     file(GLOB_RECURSE _files RELATIVE "${dist_dir}" "${dist_dir}/*")

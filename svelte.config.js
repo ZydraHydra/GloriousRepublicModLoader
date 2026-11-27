@@ -5,9 +5,16 @@ import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 const config = {
 	preprocess: vitePreprocess(),
 	kit: {
+		outDir: 'build/.svelte-kit',
+		files: {
+			assets: 'src/launcher/ui/static',
+			lib: 'src/launcher/ui/lib',
+			routes: 'src/launcher/ui/routes',
+			appTemplate: 'src/launcher/ui/app.html'
+		},
 		adapter: adapter({
-			pages: '../../../build/dist',
-			assets: '../../../build/dist',
+			pages: 'build/dist',
+			assets: 'build/dist',
 			fallback: 'index.html',
 			precompress: false,
 			strict: true

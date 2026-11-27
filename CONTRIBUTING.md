@@ -30,7 +30,6 @@ Before submitting a PR:
 
 1. **SvelteKit UI Check (`src/launcher/ui/`):**
    ```powershell
-   cd src/launcher/ui
    npm run check
    npm run build
    ```
