@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cfloat>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -256,6 +257,7 @@ DirectSaveLoadTargets                  g_directLoadTargets{};
 std::atomic<bool>                      g_directLoadConfigured{false};
 std::atomic<bool>                      g_directLoadScanCompleted{false};
 std::filesystem::path                  g_gameDir;
+std::filesystem::path                  g_saveRootOverride;
 
 std::mutex              g_d3dMutex;
 ID3D11Device*           g_device      = nullptr;
@@ -263,6 +265,19 @@ ID3D11DeviceContext*    g_ctx         = nullptr;
 ID3D11RenderTargetView* g_rtv         = nullptr;
 HWND                    g_hwnd        = nullptr;
 WNDPROC                 g_origWndProc = nullptr;
+
+std::string             g_activeNavKey = "__builtin_loaded_mods";
+bool                    g_contentCollapsed = false;
+bool                    g_maximized        = false;
+bool                    g_pendingGeometry  = false;
+ImVec2                  g_targetPos{0.f, 0.f};
+ImVec2                  g_targetSize{840.f, 540.f};
+ImVec2                  g_expandedSize{840.f, 540.f};
+ImVec2                  g_restorePos{60.f, 60.f};
+ImVec2                  g_restoreSize{840.f, 540.f};
+ImFont*                 g_fontBody     = nullptr;
+ImFont*                 g_fontBold     = nullptr;
+ImFont*                 g_fontMono     = nullptr;
 
 // Guard depth for ImGui::BeginDisabled inside active sandboxed tab
 thread_local int g_activeDisabledDepth = 0;
@@ -1220,21 +1235,21 @@ void applyWrsrTheme()
     style.FramePadding      = ImVec2(9.f, 5.f);
     style.ItemSpacing       = ImVec2(8.f, 7.f);
     style.WindowRounding    = 6.f;
-    style.ChildRounding     = 4.f;
+    style.ChildRounding     = 6.f;
     style.FrameRounding     = 4.f;
     style.PopupRounding     = 4.f;
     style.TabRounding       = 4.f;
     style.ScrollbarRounding = 4.f;
-    style.GrabRounding      = 3.f;
+    style.GrabRounding      = 4.f;
     style.WindowBorderSize  = 1.f;
     style.ChildBorderSize   = 1.f;
     style.FrameBorderSize   = 1.f;
-    style.ScrollbarSize     = 10.f;
+    style.ScrollbarSize     = 9.f;
 
     ImVec4* c = style.Colors;
     c[ImGuiCol_Text]                 = ImVec4(0.925f, 0.906f, 0.863f, 1.00f); // #ece7dc
     c[ImGuiCol_TextDisabled]         = ImVec4(0.604f, 0.627f, 0.667f, 1.00f); // #9aa0aa
-    c[ImGuiCol_WindowBg]             = ImVec4(0.075f, 0.082f, 0.094f, 0.97f); // #131518
+    c[ImGuiCol_WindowBg]             = ImVec4(0.075f, 0.082f, 0.094f, 0.98f); // #131518
     c[ImGuiCol_ChildBg]              = ImVec4(0.098f, 0.110f, 0.129f, 1.00f); // #191c21
     c[ImGuiCol_PopupBg]              = ImVec4(0.098f, 0.110f, 0.129f, 0.98f); // #191c21
     c[ImGuiCol_Border]               = ImVec4(0.165f, 0.180f, 0.208f, 1.00f); // #2a2e35
@@ -1265,6 +1280,35 @@ void applyWrsrTheme()
     c[ImGuiCol_TableBorderStrong]    = ImVec4(0.165f, 0.180f, 0.208f, 1.00f); // #2a2e35
     c[ImGuiCol_TableBorderLight]     = ImVec4(0.129f, 0.145f, 0.173f, 0.75f); // #21252c
     c[ImGuiCol_TableRowBgAlt]        = ImVec4(0.098f, 0.110f, 0.129f, 0.45f);
+}
+
+void loadLauncherFonts()
+{
+    ImGuiIO& io = ImGui::GetIO();
+    wchar_t winDir[MAX_PATH]{};
+    const UINT len = GetWindowsDirectoryW(winDir, MAX_PATH);
+    if (len > 0 && len < MAX_PATH) {
+        const std::filesystem::path fontsDir = std::filesystem::path(winDir) / L"Fonts";
+        std::error_code ec;
+        ImFontConfig cfg;
+        cfg.OversampleH = 2;
+        cfg.OversampleV = 2;
+        const auto segoe = fontsDir / L"segoeui.ttf";
+        if (std::filesystem::exists(segoe, ec)) {
+            g_fontBody = io.Fonts->AddFontFromFileTTF(wideToUtf8(segoe.wstring()).c_str(), 15.5f, &cfg);
+        }
+        const auto segoeBold = fontsDir / L"segoeuib.ttf";
+        if (std::filesystem::exists(segoeBold, ec)) {
+            g_fontBold = io.Fonts->AddFontFromFileTTF(wideToUtf8(segoeBold.wstring()).c_str(), 15.5f, &cfg);
+        }
+        const auto consola = fontsDir / L"consola.ttf";
+        if (std::filesystem::exists(consola, ec)) {
+            g_fontMono = io.Fonts->AddFontFromFileTTF(wideToUtf8(consola.wstring()).c_str(), 13.5f, &cfg);
+        }
+    }
+    if (!g_fontBody) {
+        g_fontBody = io.Fonts->AddFontDefault();
+    }
 }
 
 void releaseRenderTarget()
@@ -1345,21 +1389,300 @@ LRESULT CALLBACK hookedWndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp)
     return CallWindowProcW(g_origWndProc, hWnd, msg, wp, lp);
 }
 
-void renderBuiltInLoadedModsTab()
+// ── Launcher-Matched UI Helpers ──────────────────────────────────────────────
+bool beginPanelCard(const char* id, const char* title = nullptr)
 {
-    ImGui::TextColored(ImVec4(0.91f, 0.78f, 0.45f, 1.f),
-                       "Glorious Republic Mod Loader (GRML v%s)", GRML_BUILD_VERSION);
-    ImGui::TextDisabled("In-game Mod Settings & Diagnostics. Enable or disable mods in the GRML Launcher.");
-    ImGui::Separator();
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.098f, 0.110f, 0.129f, 1.00f)); // #191c21
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.f, 12.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.f);
+    const bool ok = ImGui::BeginChild(
+        id, ImVec2(0.f, 0.f),
+        ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding);
+    if (ok && title && *title) {
+        if (g_fontBold) ImGui::PushFont(g_fontBold);
+        ImGui::TextColored(ImVec4(0.910f, 0.769f, 0.463f, 1.00f), "%s", title); // #e8c476
+        if (g_fontBold) ImGui::PopFont();
+        ImGui::Spacing();
+    }
+    return ok;
+}
 
-    // Read-only Loaded Mods table
+void endPanelCard()
+{
+    ImGui::EndChild();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+}
+
+bool drawToggleSwitch(const char* id, bool* v)
+{
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float w = 36.f;
+    const float h = 19.f;
+    const float r = h * 0.5f;
+
+    ImGui::InvisibleButton(id, ImVec2(w, h));
+    const bool clicked = ImGui::IsItemClicked();
+    if (clicked && v) *v = !(*v);
+
+    const bool hovered = ImGui::IsItemHovered();
+    const bool on = v ? *v : false;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    const ImU32 trackCol = on
+        ? (hovered ? IM_COL32(232, 196, 118, 255) : IM_COL32(212, 168, 83, 255))
+        : (hovered ? IM_COL32(46, 52, 62, 255) : IM_COL32(34, 38, 46, 255));
+    const ImU32 borderCol = on ? IM_COL32(232, 196, 118, 255) : IM_COL32(58, 64, 74, 255);
+
+    dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), trackCol, r);
+    dl->AddRect(p, ImVec2(p.x + w, p.y + h), borderCol, r, 0, 1.f);
+
+    const float knobX = on ? (p.x + w - r) : (p.x + r);
+    const float knobY = p.y + r;
+    const ImU32 knobCol = on ? IM_COL32(22, 20, 16, 255) : IM_COL32(236, 231, 220, 255);
+    dl->AddCircleFilled(ImVec2(knobX, knobY), r - 3.f, knobCol);
+    return clicked;
+}
+
+bool drawPrimaryButton(const char* label)
+{
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.831f, 0.659f, 0.325f, 1.00f));        // #d4a853
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.910f, 0.769f, 0.463f, 1.00f)); // #e8c476
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.769f, 0.584f, 0.239f, 1.00f));  // #c4953d
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.086f, 0.078f, 0.063f, 1.00f));          // #161410
+    if (g_fontBold) ImGui::PushFont(g_fontBold);
+    const bool pressed = ImGui::Button(label);
+    if (g_fontBold) ImGui::PopFont();
+    ImGui::PopStyleColor(4);
+    return pressed;
+}
+
+bool renderSidebarNavItem(const char* id,
+                          const char* label,
+                          bool        selected,
+                          const char* badgeText   = nullptr,
+                          bool        badgeDanger = false)
+{
+    const float availW = ImGui::GetContentRegionAvail().x;
+    const float itemH  = 32.f;
+    const ImVec2 p     = ImGui::GetCursorScreenPos();
+    const bool clicked = ImGui::InvisibleButton(id, ImVec2(availW, itemH));
+    const bool hovered = ImGui::IsItemHovered();
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    if (selected) {
+        dl->AddRectFilled(p, ImVec2(p.x + availW, p.y + itemH), IM_COL32(33, 37, 44, 255), 4.f); // #21252c
+        dl->AddRect(p, ImVec2(p.x + availW, p.y + itemH), IM_COL32(42, 46, 53, 255), 4.f);       // #2a2e35
+        dl->AddRectFilled(ImVec2(p.x, p.y + 2.f), ImVec2(p.x + 3.f, p.y + itemH - 2.f),
+                          IM_COL32(212, 168, 83, 255), 1.f); // #d4a853 left bar
+    } else if (hovered) {
+        dl->AddRectFilled(p, ImVec2(p.x + availW, p.y + itemH), IM_COL32(25, 28, 33, 255), 4.f); // #191c21
+    }
+
+    float badgeReserve = 8.f;
+    if (badgeText && *badgeText) {
+        const ImVec2 bSz = ImGui::CalcTextSize(badgeText);
+        const float pillW = bSz.x + 14.f;
+        const float pillH = 18.f;
+        const float bx    = p.x + availW - pillW - 7.f;
+        const float by    = p.y + (itemH - pillH) * 0.5f;
+        const ImU32 pillBg = badgeDanger ? IM_COL32(95, 32, 28, 255) : IM_COL32(40, 44, 52, 255);
+        const ImU32 pillFg = badgeDanger ? IM_COL32(242, 97, 87, 255) : IM_COL32(232, 196, 118, 255);
+        dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + pillW, by + pillH), pillBg, 9.f);
+        dl->AddText(ImVec2(bx + 7.f, by + (pillH - bSz.y) * 0.5f), pillFg, badgeText);
+        badgeReserve = pillW + 14.f;
+    }
+
+    const ImU32 textCol = selected
+        ? IM_COL32(232, 196, 118, 255) // #e8c476
+        : (hovered ? IM_COL32(236, 231, 220, 255) : IM_COL32(154, 160, 170, 255));
+    const ImVec2 tSz = ImGui::CalcTextSize(label);
+    const float tx   = p.x + 12.f;
+    const float ty   = p.y + (itemH - tSz.y) * 0.5f;
+    dl->PushClipRect(ImVec2(tx, p.y), ImVec2(p.x + availW - badgeReserve, p.y + itemH), true);
+    dl->AddText(ImVec2(tx, ty), textCol, label);
+    dl->PopClipRect();
+
+    return clicked;
+}
+
+void renderTopbar(const char* hotkeyStr, size_t hiddenInGameCount, bool* pOpen)
+{
+    const float barH     = 44.f;
+    const ImVec2 winPos  = ImGui::GetWindowPos();
+    const ImVec2 winSize = ImGui::GetWindowSize();
+    const ImGuiIO& io    = ImGui::GetIO();
+    ImDrawList* dl       = ImGui::GetWindowDrawList();
+
+    dl->AddRectFilled(winPos, ImVec2(winPos.x + winSize.x, winPos.y + barH), IM_COL32(24, 27, 32, 255), 6.f,
+                      ImDrawFlags_RoundCornersTop);
+    dl->AddLine(ImVec2(winPos.x, winPos.y + barH - 1.f),
+                ImVec2(winPos.x + winSize.x, winPos.y + barH - 1.f),
+                IM_COL32(42, 46, 53, 255), 1.f);
+
+    // Window control buttons on far right: [Collapse/Expand Content] [Maximize/Restore] [Close]
+    const float btnSz  = 24.f;
+    const float btnGap = 4.f;
+    const float btnY   = winPos.y + (barH - btnSz) * 0.5f;
+    const float closeX = winPos.x + winSize.x - 10.f - btnSz;
+    const float maxX   = closeX - btnGap - btnSz;
+    const float panelX = maxX - btnGap - btnSz;
+
+    // Draggable area covering the topbar (excluding the right-side control buttons)
+    ImGui::SetCursorPos(ImVec2(0.f, 0.f));
+    const float dragW = (std::max)(1.f, (panelX - winPos.x) - 6.f);
+    ImGui::InvisibleButton("##grml_topbar_drag", ImVec2(dragW, barH));
+    if (!g_maximized && ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+        const ImVec2 delta = io.MouseDelta;
+        ImGui::SetWindowPos(ImVec2(winPos.x + delta.x, winPos.y + delta.y));
+    }
+
+    // 1) Collapse / Expand Content Panel button
+    ImGui::SetCursorScreenPos(ImVec2(panelX, btnY));
+    if (ImGui::InvisibleButton("##grml_topbar_panel", ImVec2(btnSz, btnSz))) {
+        if (g_maximized) {
+            g_maximized = false;
+        }
+        if (!g_contentCollapsed) {
+            if (winSize.x >= 400.f) g_expandedSize = winSize;
+            g_contentCollapsed = true;
+            g_pendingGeometry  = true;
+            g_targetPos        = winPos;
+            g_targetSize       = ImVec2(210.f, winSize.y);
+        } else {
+            g_contentCollapsed = false;
+            g_pendingGeometry  = true;
+            g_targetPos        = winPos;
+            g_targetSize       = ImVec2((std::max)(640.f, g_expandedSize.x), winSize.y);
+        }
+    }
+    const bool panelHov = ImGui::IsItemHovered();
+    if (panelHov) {
+        dl->AddRectFilled(ImVec2(panelX, btnY), ImVec2(panelX + btnSz, btnY + btnSz),
+                          IM_COL32(42, 46, 53, 255), 4.f);
+        ImGui::SetTooltip("%s", g_contentCollapsed ? "Expand Content Panel" : "Sidebar Only (Collapse Content)");
+    }
+    {
+        const ImU32 icCol = panelHov ? IM_COL32(232, 196, 118, 255) : IM_COL32(154, 160, 170, 255);
+        const float rx0 = panelX + 5.f, ry0 = btnY + 6.f;
+        const float rx1 = panelX + btnSz - 5.f, ry1 = btnY + btnSz - 6.f;
+        dl->AddRect(ImVec2(rx0, ry0), ImVec2(rx1, ry1), icCol, 1.5f, 0, 1.3f);
+        dl->AddLine(ImVec2(rx0 + 4.5f, ry0), ImVec2(rx0 + 4.5f, ry1), icCol, 1.2f);
+        if (!g_contentCollapsed) {
+            dl->AddRectFilled(ImVec2(rx0 + 6.f, ry0 + 2.f), ImVec2(rx1 - 2.f, ry1 - 2.f),
+                              IM_COL32(212, 168, 83, 180));
+        }
+    }
+
+    // 2) Maximize / Restore button
+    ImGui::SetCursorScreenPos(ImVec2(maxX, btnY));
+    if (ImGui::InvisibleButton("##grml_topbar_max", ImVec2(btnSz, btnSz))) {
+        if (!g_maximized) {
+            g_restorePos       = winPos;
+            g_restoreSize      = g_contentCollapsed ? g_expandedSize : winSize;
+            g_contentCollapsed = false;
+            g_maximized        = true;
+            g_pendingGeometry  = true;
+            g_targetPos        = ImVec2(8.f, 8.f);
+            g_targetSize       = ImVec2((std::max)(640.f, io.DisplaySize.x - 16.f),
+                                        (std::max)(400.f, io.DisplaySize.y - 16.f));
+        } else {
+            g_maximized       = false;
+            g_pendingGeometry = true;
+            g_targetPos       = g_restorePos;
+            g_targetSize      = ImVec2((std::max)(640.f, g_restoreSize.x),
+                                       (std::max)(400.f, g_restoreSize.y));
+        }
+    }
+    const bool maxHov = ImGui::IsItemHovered();
+    if (maxHov) {
+        dl->AddRectFilled(ImVec2(maxX, btnY), ImVec2(maxX + btnSz, btnY + btnSz),
+                          IM_COL32(42, 46, 53, 255), 4.f);
+        ImGui::SetTooltip("%s", g_maximized ? "Restore Window" : "Maximize Window");
+    }
+    {
+        const ImU32 icCol = maxHov ? IM_COL32(236, 231, 220, 255) : IM_COL32(154, 160, 170, 255);
+        if (!g_maximized) {
+            dl->AddRect(ImVec2(maxX + 6.5f, btnY + 6.5f), ImVec2(maxX + btnSz - 6.5f, btnY + btnSz - 6.5f),
+                        icCol, 0.f, 0, 1.3f);
+        } else {
+            dl->AddRect(ImVec2(maxX + 8.5f, btnY + 5.5f), ImVec2(maxX + btnSz - 5.5f, btnY + btnSz - 8.5f),
+                        icCol, 0.f, 0, 1.2f);
+            dl->AddRectFilled(ImVec2(maxX + 6.f, btnY + 8.f), ImVec2(maxX + btnSz - 8.f, btnY + btnSz - 6.f),
+                              IM_COL32(24, 27, 32, 255));
+            dl->AddRect(ImVec2(maxX + 6.f, btnY + 8.f), ImVec2(maxX + btnSz - 8.f, btnY + btnSz - 6.f),
+                        icCol, 0.f, 0, 1.2f);
+        }
+    }
+
+    // 3) Close button
+    ImGui::SetCursorScreenPos(ImVec2(closeX, btnY));
+    if (ImGui::InvisibleButton("##grml_topbar_close", ImVec2(btnSz, btnSz))) {
+        if (pOpen) *pOpen = false;
+    }
+    const bool closeHov = ImGui::IsItemHovered();
+    if (closeHov) {
+        dl->AddRectFilled(ImVec2(closeX, btnY), ImVec2(closeX + btnSz, btnY + btnSz),
+                          IM_COL32(179, 57, 43, 220), 4.f);
+        ImGui::SetTooltip("Close [%s / Esc]", hotkeyStr ? hotkeyStr : "F9");
+    }
+    {
+        const ImU32 xCol = closeHov ? IM_COL32(255, 255, 255, 255) : IM_COL32(154, 160, 170, 255);
+        const float xPad = 7.f;
+        dl->AddLine(ImVec2(closeX + xPad, btnY + xPad),
+                    ImVec2(closeX + btnSz - xPad, btnY + btnSz - xPad), xCol, 1.5f);
+        dl->AddLine(ImVec2(closeX + btnSz - xPad, btnY + xPad),
+                    ImVec2(closeX + xPad, btnY + btnSz - xPad), xCol, 1.5f);
+    }
+
+    // Left: Brand title + version + hotkey (compact when sidebar-only)
+    const bool compactBar = (winSize.x < 380.f);
+    const char* brandText = compactBar ? "GRML" : "GLORIOUS REPUBLIC MOD LOADER";
+    char metaBuf[48]{};
+    if (compactBar) {
+        std::snprintf(metaBuf, sizeof(metaBuf), "[%s]", hotkeyStr ? hotkeyStr : "F9");
+    } else {
+        std::snprintf(metaBuf, sizeof(metaBuf), "v%s [%s]", GRML_BUILD_VERSION, hotkeyStr ? hotkeyStr : "F9");
+    }
+    if (g_fontBold) ImGui::PushFont(g_fontBold);
+    const ImVec2 bSz = ImGui::CalcTextSize(brandText);
+    dl->AddText(ImVec2(winPos.x + 14.f, winPos.y + (barH - bSz.y) * 0.5f),
+                IM_COL32(232, 196, 118, 255), brandText);
+    if (g_fontBold) ImGui::PopFont();
+    const ImVec2 metaSz = ImGui::CalcTextSize(metaBuf);
+    dl->AddText(ImVec2(winPos.x + 14.f + bSz.x + 8.f, winPos.y + (barH - metaSz.y) * 0.5f),
+                IM_COL32(154, 160, 170, 255), metaBuf);
+
+    // Optional hidden-on-menu status pill (only when expanded)
+    if (!compactBar && hiddenInGameCount > 0) {
+        char hiddenPill[64]{};
+        std::snprintf(hiddenPill, sizeof(hiddenPill), "%zu in-game tab%s hidden on Menu",
+                      hiddenInGameCount, hiddenInGameCount == 1 ? "" : "s");
+        const ImVec2 hSz  = ImGui::CalcTextSize(hiddenPill);
+        const float pillH = 24.f;
+        const float py    = winPos.y + (barH - pillH) * 0.5f;
+        const float hW    = hSz.x + 18.f;
+        const float hX    = panelX - 10.f - hW;
+        dl->AddRectFilled(ImVec2(hX, py), ImVec2(hX + hW, py + pillH), IM_COL32(35, 32, 24, 255), 4.f);
+        dl->AddRect(ImVec2(hX, py), ImVec2(hX + hW, py + pillH), IM_COL32(212, 168, 83, 255), 4.f);
+        dl->AddText(ImVec2(hX + 9.f, py + (pillH - hSz.y) * 0.5f), IM_COL32(232, 196, 118, 255), hiddenPill);
+    }
+
+    ImGui::SetCursorPos(ImVec2(0.f, barH));
+}
+
+void renderBuiltInLoadedModsView()
+{
+    ImGui::TextDisabled("In-game Mod Settings & Diagnostics. Enable or disable mods in the GRML Launcher.");
+    ImGui::Spacing();
+
     std::vector<LoadedModSummary> modsCopy;
     {
         std::lock_guard lock(g_tabsMutex);
         modsCopy = g_loadedMods;
     }
 
-    if (ImGui::CollapsingHeader("Loaded Mods", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (beginPanelCard("##card_loaded_mods", "Loaded Mods")) {
         if (modsCopy.empty()) {
             ImGui::TextDisabled("No external plugin DLLs loaded.");
         } else if (ImGui::BeginTable("##grml_mods_tbl", 6,
@@ -1389,15 +1712,17 @@ void renderBuiltInLoadedModsTab()
             ImGui::EndTable();
         }
     }
+    endPanelCard();
 
-    // Live Hook Telemetry table
+    ImGui::Spacing();
+
     std::vector<HookTelemetryEntry> teleCopy;
     {
         std::lock_guard lock(g_telemetryMutex);
         teleCopy = g_telemetry;
     }
 
-    if (ImGui::CollapsingHeader("Hook Telemetry (Calls/Frame & ms/Frame)", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (beginPanelCard("##card_hook_tele", "Hook Telemetry (Calls/Frame & ms/Frame)")) {
         if (teleCopy.empty()) {
             ImGui::TextDisabled("No hook telemetry reported yet.");
         } else if (ImGui::BeginTable("##grml_tele_tbl", 4,
@@ -1418,70 +1743,104 @@ void renderBuiltInLoadedModsTab()
             ImGui::EndTable();
         }
     }
+    endPanelCard();
+}
 
-    // Built-in Asset Overrides (Media VFS) read-only active overrides telemetry
-    {
-        auto& vfs = vfs::VfsIndex::get();
-        if (ImGui::CollapsingHeader("Asset Overrides (Media VFS)")) {
-            if (!vfs.isEnabled()) {
-                ImGui::TextDisabled("Asset redirection is disabled in the GRML Launcher.");
-            } else {
-                ImGui::Text("Indexed Files: %zu  |  Conflicts: %zu  |  Redirected Opens: %llu",
-                            vfs.indexedFileCount(),
-                            vfs.conflictCount(),
-                            static_cast<unsigned long long>(vfs_redirect::redirectHits()));
-                size_t activeCount = 0;
-                for (size_t pi = 0; pi < vfs.packs().size(); ++pi) {
-                    const auto& pk = vfs.packs()[pi];
-                    if (!pk.enabled || pk.indexedFiles == 0) continue;
-                    ++activeCount;
-                    ImGui::BulletText("#%zu [%s] %s (%zu/%zu files, %zu conflicts)",
-                                      activeCount,
-                                      pk.source == vfs::PackSource::Workshop ? "Workshop" : "Local",
-                                      pk.displayName.c_str(),
-                                      pk.indexedFiles,
-                                      pk.totalFiles,
-                                      pk.conflictCount);
-                }
-                if (activeCount == 0) {
-                    ImGui::TextDisabled("No active asset overrides.");
-                }
+void renderBuiltInOverridesView()
+{
+    auto& vfs = vfs::VfsIndex::get();
+    if (beginPanelCard("##card_vfs_overrides", "Asset Overrides (Media VFS)")) {
+        if (!vfs.isEnabled()) {
+            ImGui::TextDisabled("Asset redirection is disabled in the GRML Launcher.");
+        } else {
+            ImGui::Text("Indexed Files: %zu  |  Conflicts: %zu  |  Redirected Opens: %llu",
+                        vfs.indexedFileCount(),
+                        vfs.conflictCount(),
+                        static_cast<unsigned long long>(vfs_redirect::redirectHits()));
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+            size_t activeCount = 0;
+            for (size_t pi = 0; pi < vfs.packs().size(); ++pi) {
+                const auto& pk = vfs.packs()[pi];
+                if (!pk.enabled || pk.indexedFiles == 0) continue;
+                ++activeCount;
+                ImGui::BulletText("#%zu [%s] %s (%zu/%zu files, %zu conflicts)",
+                                  activeCount,
+                                  pk.source == vfs::PackSource::Workshop ? "Workshop" : "Local",
+                                  pk.displayName.c_str(),
+                                  pk.indexedFiles,
+                                  pk.totalFiles,
+                                  pk.conflictCount);
+            }
+            if (activeCount == 0) {
+                ImGui::TextDisabled("No active asset overrides.");
             }
         }
     }
+    endPanelCard();
+}
 
-    // Unified Ring-Buffer Log Viewer
-    if (ImGui::CollapsingHeader("Runtime Log (grml.log)")) {
-        const auto entries = logger::snapshotRecent(120);
-        ImGui::BeginChild("##grml_log_scroll", ImVec2(0.f, 150.f), true);
-        for (const auto& e : entries) {
-            ImVec4 col(0.85f, 0.83f, 0.76f, 1.f);
-            if (e.level == GRML_LOG_WARN) col = ImVec4(0.95f, 0.76f, 0.30f, 1.f);
-            else if (e.level == GRML_LOG_ERROR) col = ImVec4(0.95f, 0.38f, 0.35f, 1.f);
-            ImGui::TextColored(col, "[%s] [%s] %s", e.timestamp, e.component.c_str(), e.message.c_str());
+void renderBuiltInLogView()
+{
+    if (g_fontBold) ImGui::PushFont(g_fontBold);
+    ImGui::TextColored(ImVec4(0.910f, 0.769f, 0.463f, 1.00f), "Runtime Log (grml.log)");
+    if (g_fontBold) ImGui::PopFont();
+    ImGui::Spacing();
+
+    const auto entries = logger::snapshotRecent(200);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.059f, 0.067f, 0.078f, 1.00f)); // #0f1114
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.f, 10.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.f);
+    if (ImGui::BeginChild("##grml_log_scroll", ImVec2(0.f, 0.f),
+                          ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding)) {
+        if (g_fontMono) ImGui::PushFont(g_fontMono);
+        if (entries.empty()) {
+            ImGui::TextDisabled("No log entries recorded.");
+        } else {
+            for (const auto& e : entries) {
+                ImVec4 col(0.85f, 0.83f, 0.76f, 1.f);
+                if (e.level == GRML_LOG_WARN) col = ImVec4(0.95f, 0.76f, 0.30f, 1.f);
+                else if (e.level == GRML_LOG_ERROR) col = ImVec4(0.95f, 0.38f, 0.35f, 1.f);
+                ImGui::TextColored(col, "[%s] [%s] %s", e.timestamp, e.component.c_str(), e.message.c_str());
+            }
         }
-        ImGui::EndChild();
+        if (g_fontMono) ImGui::PopFont();
     }
+    ImGui::EndChild();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
 }
 
 void renderDeclarativeIniTab(RegisteredTab& tab)
 {
     ImGui::PushID(tab.pluginId.c_str());
     if (tab.autoGeneratedIni) {
-        ImGui::TextDisabled("Auto-built from %s (changes apply after restart; Ctrl+Click sliders to type custom numbers)",
+        ImGui::TextDisabled("Auto-built from %s (Ctrl+Click sliders to type custom numbers)",
                             wideToUtf8(tab.iniPath.filename().wstring()).c_str());
+        ImGui::Spacing();
     }
     for (size_t i = 0; i < tab.iniFields.size(); ++i) {
         auto& f = tab.iniFields[i];
         ImGui::PushID(static_cast<int>(i));
         switch (f.type) {
         case UiControlType::Header:
+            if (i > 0) ImGui::Spacing();
+            if (g_fontBold) ImGui::PushFont(g_fontBold);
+            ImGui::TextColored(ImVec4(0.831f, 0.659f, 0.325f, 1.00f), "%s", f.label.c_str());
+            if (g_fontBold) ImGui::PopFont();
             ImGui::Separator();
-            ImGui::TextColored(ImVec4(0.91f, 0.78f, 0.45f, 1.f), "%s", f.label.c_str());
             break;
         case UiControlType::Bool: {
             bool b = (f.boolVal != 0);
-            if (ImGui::Checkbox(f.label.c_str(), &b)) {
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(f.label.c_str());
+            if (!f.tooltip.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+                ImGui::SetTooltip("%s", f.tooltip.c_str());
+            }
+            const float avail = ImGui::GetContentRegionAvail().x;
+            ImGui::SameLine(avail > 48.f ? avail - 36.f : 0.f);
+            if (drawToggleSwitch("##toggle", &b)) {
                 f.boolVal = b ? 1u : 0u;
                 syncDeclarativeLivePtrs(tab);
                 if (tab.onIniApplied) tab.onIniApplied(tab.iniUserData);
@@ -1529,14 +1888,16 @@ void renderDeclarativeIniTab(RegisteredTab& tab)
             }
             break;
         }
-        if (!f.tooltip.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+        if (f.type != UiControlType::Bool && !f.tooltip.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
             ImGui::SetTooltip("%s", f.tooltip.c_str());
         }
         ImGui::PopID();
     }
 
+    ImGui::Spacing();
     ImGui::Separator();
-    if (ImGui::Button("Apply & Save")) {
+    ImGui::Spacing();
+    if (drawPrimaryButton("Apply & Save")) {
         tab.iniStatusMsg = saveDeclarativeIni(tab)
                                ? ("Saved " + wideToUtf8(tab.iniPath.filename().wstring()))
                                : "ERROR: Failed to save .ini file";
@@ -1563,6 +1924,8 @@ void renderDeclarativeIniTab(RegisteredTab& tab)
         tab.iniStatusMsg = "Defaults restored (click Apply & Save to persist).";
     }
     if (!tab.iniStatusMsg.empty()) {
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled("%s", tab.iniStatusMsg.c_str());
     }
     ImGui::PopID();
@@ -1654,33 +2017,44 @@ void renderUI()
 
     bool open = mainVisible;
     if (mainVisible) {
-        ImGui::SetNextWindowSize(ImVec2(660.f, 440.f), ImGuiCond_FirstUseEver);
+        if (g_pendingGeometry) {
+            ImGui::SetNextWindowPos(g_targetPos, ImGuiCond_Always);
+            ImGui::SetNextWindowSize(g_targetSize, ImGuiCond_Always);
+            g_pendingGeometry = false;
+        } else {
+            ImGui::SetNextWindowSize(ImVec2(840.f, 540.f), ImGuiCond_FirstUseEver);
+        }
+        const float minW = g_contentCollapsed ? 210.f : 640.f;
+        ImGui::SetNextWindowSizeConstraints(ImVec2(minW, 400.f), ImVec2(FLT_MAX, FLT_MAX));
     }
-    char titleBuf[64]{};
+    char hotkeyBuf[16]{};
     const uint16_t curVk = g_toggleVk.load(std::memory_order_relaxed);
     if (curVk >= VK_F1 && curVk <= VK_F12) {
-        std::snprintf(titleBuf, sizeof(titleBuf), "GRML Mod Settings [F%u]###GRML_ModSettings",
-                      static_cast<unsigned>(curVk - VK_F1 + 1));
+        std::snprintf(hotkeyBuf, sizeof(hotkeyBuf), "F%u", static_cast<unsigned>(curVk - VK_F1 + 1));
     } else if (curVk == VK_INSERT) {
-        std::snprintf(titleBuf, sizeof(titleBuf), "GRML Mod Settings [Insert]###GRML_ModSettings");
+        std::snprintf(hotkeyBuf, sizeof(hotkeyBuf), "Insert");
     } else if (curVk == VK_HOME) {
-        std::snprintf(titleBuf, sizeof(titleBuf), "GRML Mod Settings [Home]###GRML_ModSettings");
+        std::snprintf(hotkeyBuf, sizeof(hotkeyBuf), "Home");
     } else if (curVk == VK_END) {
-        std::snprintf(titleBuf, sizeof(titleBuf), "GRML Mod Settings [End]###GRML_ModSettings");
+        std::snprintf(hotkeyBuf, sizeof(hotkeyBuf), "End");
     } else if (curVk == VK_PRIOR) {
-        std::snprintf(titleBuf, sizeof(titleBuf), "GRML Mod Settings [PageUp]###GRML_ModSettings");
+        std::snprintf(hotkeyBuf, sizeof(hotkeyBuf), "PageUp");
     } else if (curVk == VK_NEXT) {
-        std::snprintf(titleBuf, sizeof(titleBuf), "GRML Mod Settings [PageDown]###GRML_ModSettings");
+        std::snprintf(hotkeyBuf, sizeof(hotkeyBuf), "PageDown");
     } else if (curVk == VK_PAUSE) {
-        std::snprintf(titleBuf, sizeof(titleBuf), "GRML Mod Settings [Pause]###GRML_ModSettings");
+        std::snprintf(hotkeyBuf, sizeof(hotkeyBuf), "Pause");
     } else if (curVk == VK_OEM_3) {
-        std::snprintf(titleBuf, sizeof(titleBuf), "GRML Mod Settings [~]###GRML_ModSettings");
+        std::snprintf(hotkeyBuf, sizeof(hotkeyBuf), "~");
     } else if ((curVk >= 'A' && curVk <= 'Z') || (curVk >= '0' && curVk <= '9')) {
-        std::snprintf(titleBuf, sizeof(titleBuf), "GRML Mod Settings [%c]###GRML_ModSettings", static_cast<char>(curVk));
+        std::snprintf(hotkeyBuf, sizeof(hotkeyBuf), "%c", static_cast<char>(curVk));
     } else {
-        std::snprintf(titleBuf, sizeof(titleBuf), "GRML Mod Settings [F9]###GRML_ModSettings");
+        std::snprintf(hotkeyBuf, sizeof(hotkeyBuf), "F9");
     }
-    const bool windowOpen = mainVisible && ImGui::Begin(titleBuf, &open, ImGuiWindowFlags_NoCollapse);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+    const ImGuiWindowFlags winFlags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+                                      (g_maximized ? ImGuiWindowFlags_NoResize : ImGuiWindowFlags_None);
+    const bool windowOpen = mainVisible && ImGui::Begin("###GRML_ModSettings", &open, winFlags);
+    ImGui::PopStyleVar();
     if (mainVisible) {
         const ImVec2 pos  = ImGui::GetWindowPos();
         const ImVec2 size = ImGui::GetWindowSize();
@@ -1693,39 +2067,147 @@ void renderUI()
 
     if (windowOpen) {
         const bool gameRunning = isGameRunning();
-        if (ImGui::BeginTabBar("##GRML_ModSettings_Tabs", ImGuiTabBarFlags_FittingPolicyScroll)) {
-            if (ImGui::BeginTabItem("Loaded Mods###grml_loaded_mods")) {
-                ImGui::Spacing();
-                renderBuiltInLoadedModsTab();
-                ImGui::EndTabItem();
+        size_t modCount           = 0;
+        size_t visibleModTabCount = 0;
+        size_t hiddenInGameCount  = 0;
+        {
+            std::lock_guard lock(g_tabsMutex);
+            modCount = g_loadedMods.size();
+            for (const auto& tab : g_tabs) {
+                if (!gameRunning && tab.mainMenuAvailable == 0) ++hiddenInGameCount;
+                else ++visibleModTabCount;
+            }
+        }
+        size_t activeOverridePacks = 0;
+        for (const auto& pk : vfs::VfsIndex::get().packs()) {
+            if (pk.enabled && pk.indexedFiles > 0) ++activeOverridePacks;
+        }
+
+        const ImVec2 mainWinPos  = ImGui::GetWindowPos();
+        const ImVec2 mainWinSize = ImGui::GetWindowSize();
+        auto selectNav = [&](const std::string& key) {
+            g_activeNavKey = key;
+            if (g_contentCollapsed) {
+                g_contentCollapsed = false;
+                g_pendingGeometry  = true;
+                g_targetPos        = mainWinPos;
+                g_targetSize       = ImVec2((std::max)(640.f, g_expandedSize.x), mainWinSize.y);
+            }
+        };
+
+        renderTopbar(hotkeyBuf, hiddenInGameCount, &open);
+
+        // ── Left Sidebar Navigation ──────────────────────────────────────────
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.082f, 0.090f, 0.106f, 1.00f)); // #15171b
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.f, 10.f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 0.f);
+        if (ImGui::BeginChild("##grml_sidebar", ImVec2(210.f, 0.f),
+                              ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding,
+                              ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+            char modBadge[16]{};
+            std::snprintf(modBadge, sizeof(modBadge), "%zu", modCount);
+            if (renderSidebarNavItem("##nav_loaded_mods", "Loaded Mods",
+                                     g_activeNavKey == "__builtin_loaded_mods", modBadge)) {
+                selectNav("__builtin_loaded_mods");
             }
 
-            std::lock_guard lock(g_tabsMutex);
-            size_t hiddenInGameCount = 0;
-            for (auto& tab : g_tabs) {
-                if (!gameRunning && tab.mainMenuAvailable == 0) {
-                    ++hiddenInGameCount;
-                    continue;
+            char ovBadge[16]{};
+            if (activeOverridePacks > 0) {
+                std::snprintf(ovBadge, sizeof(ovBadge), "%zu", activeOverridePacks);
+            }
+            if (renderSidebarNavItem("##nav_overrides", "Asset Overrides",
+                                     g_activeNavKey == "__builtin_overrides",
+                                     activeOverridePacks > 0 ? ovBadge : nullptr)) {
+                selectNav("__builtin_overrides");
+            }
+
+            if (renderSidebarNavItem("##nav_logs", "Runtime Log",
+                                     g_activeNavKey == "__builtin_logs")) {
+                selectNav("__builtin_logs");
+            }
+
+            // Fixed MOD SETTINGS header + scrollable list strictly underneath
+            if (visibleModTabCount > 0) {
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+                ImGui::TextDisabled("MOD SETTINGS");
+                ImGui::Spacing();
+
+                if (ImGui::BeginChild("##grml_sidebar_mods", ImVec2(0.f, 0.f),
+                                      ImGuiChildFlags_None)) {
+                    std::lock_guard lock(g_tabsMutex);
+                    for (const auto& tab : g_tabs) {
+                        if (!gameRunning && tab.mainMenuAvailable == 0) continue;
+                        const std::string key = "tab_" + tab.pluginId + "_" + std::to_string(tab.tabId);
+                        const std::string navId = "##nav_" + key;
+                        if (renderSidebarNavItem(navId.c_str(), tab.title.c_str(),
+                                                 g_activeNavKey == key,
+                                                 tab.uiFaulted ? "FAULT" : nullptr,
+                                                 tab.uiFaulted)) {
+                            selectNav(key);
+                        }
+                    }
                 }
-                const std::string tabLabel = tab.title + "###grml_tab_" + tab.pluginId + "_" + std::to_string(tab.tabId);
-                if (ImGui::BeginTabItem(tabLabel.c_str())) {
+                ImGui::EndChild();
+            }
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor();
+
+        // ── Right Main Content Pane ──────────────────────────────────────────
+        if (!g_contentCollapsed) {
+        ImGui::SameLine(0.f, 0.f);
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.075f, 0.082f, 0.094f, 1.00f)); // #131518
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.f, 14.f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 0.f);
+        if (ImGui::BeginChild("##grml_content", ImVec2(0.f, 0.f),
+                              ImGuiChildFlags_AlwaysUseWindowPadding)) {
+            bool fallbackToLoadedMods = false;
+            if (g_activeNavKey == "__builtin_loaded_mods") {
+                renderBuiltInLoadedModsView();
+            } else if (g_activeNavKey == "__builtin_overrides") {
+                renderBuiltInOverridesView();
+            } else if (g_activeNavKey == "__builtin_logs") {
+                renderBuiltInLogView();
+            } else {
+                std::lock_guard lock(g_tabsMutex);
+                RegisteredTab* selectedTab = nullptr;
+                for (auto& tab : g_tabs) {
+                    if (!gameRunning && tab.mainMenuAvailable == 0) continue;
+                    const std::string key = "tab_" + tab.pluginId + "_" + std::to_string(tab.tabId);
+                    if (key == g_activeNavKey) {
+                        selectedTab = &tab;
+                        break;
+                    }
+                }
+                if (!selectedTab) {
+                    g_activeNavKey = "__builtin_loaded_mods";
+                    fallbackToLoadedMods = true;
+                } else {
+                    if (g_fontBold) ImGui::PushFont(g_fontBold);
+                    ImGui::TextColored(ImVec4(0.910f, 0.769f, 0.463f, 1.00f), "%s", selectedTab->title.c_str());
+                    if (g_fontBold) ImGui::PopFont();
                     ImGui::Spacing();
-                    if (tab.uiFaulted) {
+
+                    if (selectedTab->uiFaulted) {
                         ImGui::TextColored(ImVec4(0.95f, 0.38f, 0.35f, 1.f),
                                            "[UI Faulted - Disabled] Exception 0x%08lX caught inside plugin tab '%s'.",
-                                           tab.faultCode, tab.title.c_str());
-                    } else if (tab.kind == TabKind::CustomGrml) {
-                        ImGui::PushID(tab.pluginId.c_str());
-                        const bool childOk = ImGui::BeginChild("##grml_custom_sandbox", ImVec2(0.f, 0.f), false);
+                                           selectedTab->faultCode, selectedTab->title.c_str());
+                    } else if (selectedTab->kind == TabKind::CustomGrml) {
+                        ImGui::PushID(selectedTab->pluginId.c_str());
+                        const bool childOk = ImGui::BeginChild("##grml_custom_sandbox", ImVec2(0.f, 0.f),
+                                                               ImGuiChildFlags_None);
                         if (childOk) {
                             g_activeDisabledDepth = 0;
                             DWORD excCode = 0;
-                            if (!invokeRenderTabSeh(tab.renderCb, &g_grmlUiApi, tab.userData, &excCode)) {
-                                tab.uiFaulted = true;
-                                tab.faultCode = excCode;
+                            if (!invokeRenderTabSeh(selectedTab->renderCb, &g_grmlUiApi, selectedTab->userData, &excCode)) {
+                                selectedTab->uiFaulted = true;
+                                selectedTab->faultCode = excCode;
                                 logger::logMessage(GRML_LOG_ERROR, "OverlayHub",
                                                    "Plugin tab '%s' (%s) faulted with exception 0x%08lX — marked [UI Faulted - Disabled]",
-                                                   tab.title.c_str(), tab.pluginId.c_str(), excCode);
+                                                   selectedTab->title.c_str(), selectedTab->pluginId.c_str(), excCode);
                             }
                             while (g_activeDisabledDepth > 0) {
                                 ImGui::EndDisabled();
@@ -1734,49 +2216,49 @@ void renderUI()
                         }
                         ImGui::EndChild();
                         ImGui::PopID();
-                    } else if (tab.kind == TabKind::DeclarativeIni) {
-                        ImGui::PushID(tab.pluginId.c_str());
-                        if (ImGui::BeginChild("##grml_ini_sandbox", ImVec2(0.f, 0.f), false)) {
-                            renderDeclarativeIniTab(tab);
+                    } else if (selectedTab->kind == TabKind::DeclarativeIni) {
+                        ImGui::PushID(selectedTab->pluginId.c_str());
+                        if (beginPanelCard("##grml_ini_card")) {
+                            renderDeclarativeIniTab(*selectedTab);
                         }
-                        ImGui::EndChild();
+                        endPanelCard();
                         ImGui::PopID();
-                    } else if (tab.kind == TabKind::LegacyRetained) {
-                        ImGui::PushID(tab.pluginId.c_str());
-                        if (ImGui::BeginChild("##grml_legacy_sandbox", ImVec2(0.f, 0.f), false)) {
-                            if (tab.legacyFrame) {
+                    } else if (selectedTab->kind == TabKind::LegacyRetained) {
+                        ImGui::PushID(selectedTab->pluginId.c_str());
+                        if (ImGui::BeginChild("##grml_legacy_sandbox", ImVec2(0.f, 0.f),
+                                              ImGuiChildFlags_None)) {
+                            if (selectedTab->legacyFrame) {
                                 DWORD excCode = 0;
-                                if (!invokeLegacyButtonSeh(tab.legacyFrame, tab.legacyFrameUserData, &excCode)) {
-                                    tab.uiFaulted = true;
-                                    tab.faultCode = excCode;
+                                if (!invokeLegacyButtonSeh(selectedTab->legacyFrame, selectedTab->legacyFrameUserData, &excCode)) {
+                                    selectedTab->uiFaulted = true;
+                                    selectedTab->faultCode = excCode;
                                     logger::logMessage(GRML_LOG_ERROR, "OverlayHub",
                                                        "Legacy tab frame callback '%s' faulted (0x%08lX) — marked [UI Faulted - Disabled]",
-                                                       tab.title.c_str(), excCode);
+                                                       selectedTab->title.c_str(), excCode);
                                 }
                             }
-                            if (!tab.uiFaulted) {
-                                if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false) && tab.legacySave) {
+                            if (!selectedTab->uiFaulted) {
+                                if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false) && selectedTab->legacySave) {
                                     DWORD excCode = 0;
-                                    invokeLegacyButtonSeh(tab.legacySave, tab.legacyUserData, &excCode);
+                                    invokeLegacyButtonSeh(selectedTab->legacySave, selectedTab->legacyUserData, &excCode);
                                 }
-                                for (size_t i = 0; i < tab.legacyWidgets.size(); ++i) {
-                                    renderLegacyWidget(tab.legacyWidgets[i], i);
+                                for (size_t i = 0; i < selectedTab->legacyWidgets.size(); ++i) {
+                                    renderLegacyWidget(selectedTab->legacyWidgets[i], i);
                                 }
                             }
                         }
                         ImGui::EndChild();
                         ImGui::PopID();
                     }
-                    ImGui::EndTabItem();
                 }
             }
-            ImGui::EndTabBar();
-
-            if (hiddenInGameCount > 0) {
-                ImGui::Separator();
-                ImGui::TextDisabled("%zu in-game mod config tab(s) hidden on Main Menu — load a republic to access them.",
-                                    hiddenInGameCount);
+            if (fallbackToLoadedMods) {
+                renderBuiltInLoadedModsView();
             }
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor();
         }
     }
     if (mainVisible) {
@@ -1904,7 +2386,10 @@ void processPendingDirectSaveLoad()
     if (saveFolder.empty()) return;
 
     std::error_code ec;
-    const std::filesystem::path headerPath = g_gameDir / L"media_soviet" / L"save" / saveFolder / L"header.bin";
+    const std::filesystem::path saveBase = g_saveRootOverride.empty()
+        ? (g_gameDir / L"media_soviet" / L"save")
+        : g_saveRootOverride;
+    const std::filesystem::path headerPath = saveBase / saveFolder / L"header.bin";
     if (!std::filesystem::exists(headerPath, ec)) {
         logger::logMessage(GRML_LOG_WARN, "DirectLoad",
                            "Save '%s' not found on disk (%s) — staying at Main Menu",
@@ -1944,6 +2429,7 @@ HRESULT WINAPI hookedPresent(IDXGISwapChain* sc, UINT syncInterval, UINT flags)
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
         io.IniFilename = nullptr;
         applyWrsrTheme();
+        loadLauncherFonts();
         ImGui_ImplWin32_Init(g_hwnd);
         ImGui_ImplDX11_Init(g_device, g_ctx);
         createRenderTarget(sc);
@@ -2030,10 +2516,12 @@ void setInGameFlagPtr(const volatile uint8_t* ptr) noexcept
 }
 
 void setDirectSaveLoadTargets(const DirectSaveLoadTargets& targets,
-                              const std::filesystem::path& gameDir)
+                              const std::filesystem::path& gameDir,
+                              const std::filesystem::path& saveRootOverride)
 {
     g_directLoadTargets = targets;
     g_gameDir           = gameDir;
+    g_saveRootOverride  = saveRootOverride;
     const bool ok = targets.menuActivePtr && targets.mainMenuObj &&
                     targets.loadSaveHeaderFn && targets.loadRequestedPtr && targets.newGameFlagPtr;
     g_directLoadConfigured.store(ok, std::memory_order_release);

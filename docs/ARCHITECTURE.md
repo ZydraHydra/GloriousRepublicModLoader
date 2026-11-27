@@ -23,7 +23,7 @@ grml_runtime.dll (src/runtime/, injected into SOVIET64.exe)
    ├── plugin_supervisor SEH-guarded load, rollback on start failure, CrashGuard filter
    ├── tesmio_bridge    RML API v1 + Tesmio API v3/v4 host + per-plugin hook rollback
    ├── ring_logger      Thread-safe ring-buffer + immediate-flush grml.log writer
-   └── overlay_hub      DX11/ImGui Mod Settings dialog, standalone windows, hotkeys & telemetry
+   └── overlay_hub      DX11/ImGui Mod Settings dialog (launcher-matched topbar + left sidebar, collapse/maximize controls), standalone windows, hotkeys & telemetry
 ```
 
 ## Launcher UI Pages (`src/launcher/ui/lib/views/`)

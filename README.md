@@ -19,7 +19,7 @@ GRML lets you manage Steam Workshop (`784150`) and local DLL mods, tweak mod `.i
 - **Visual Mod Settings (Launcher + In-Game Overlay):**
   - Edit mod settings with sliders, toggles, dropdowns, and tooltips—no manual `.ini` editing required.
   - Even legacy mods that only ship an `.ini` file automatically get a structured settings UI.
-  - Press **`F9`** in-game (or rebind any key in **Settings**) to open **GRML Mod Settings** right inside WRSR.
+  - Press **`F9`** in-game (or rebind any key in **Settings**) to open **GRML Mod Settings** right inside WRSR—featuring the same left-sidebar layout, card panels, and toggle switches as the launcher, plus a unified topbar with sidebar-only collapse (auto-expands on item click), maximize/restore, and close controls.
 - **Asset Overrides (Media VFS):**
   - Layer `media_soviet\` / `override\` folders or `.zip` packs (`<GameDir>\media_overrides\` and compatible Workshop items) without modifying game files.
   - Reorder pack priority and inspect file conflicts before launching.
