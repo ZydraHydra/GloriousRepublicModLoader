@@ -23,6 +23,10 @@ GRML lets you manage Steam Workshop (`784150`) and local DLL mods, tweak mod `.i
 - **Asset Overrides (Media VFS):**
   - Layer `media_soviet\` / `override\` folders or `.zip` packs (`<GameDir>\media_overrides\` and compatible Workshop items) without modifying game files.
   - Reorder pack priority and inspect file conflicts before launching.
+- **Direct-to-Save Launching & Fast Boot:**
+  - Click **▶ Continue `<SaveName>`** in the top bar (automatically updated every 5s via `/api/latest-save` from `header.bin` timestamps and `grml_session.json`) or **Launch Save** inside the **Save Inspector** to boot straight into any save.
+  - Protected by a one-shot anti-crash-loop guard (`auto_load_save` is cleared in `grml_session.json` before deserialization begins).
+  - Automatically skips the 9.5s intro logo timer (`devlogo.dds` / `publogo.dds`) while Workshop & asset indexing runs in the background (toggleable via `skip_intro_logos = 1` in `grml.ini`).
 - **Save Inspector & Post-Crash Recovery:**
   - Scan `media_soviet\save\` on demand (sorted newest-first) to see each save's date, size, map template, and referenced Workshop items.
   - Immediately spot **missing Workshop IDs** with **Copy Missing IDs** and direct Steam Client / Web links to resubscribe.
@@ -38,7 +42,7 @@ GRML lets you manage Steam Workshop (`784150`) and local DLL mods, tweak mod `.i
 2. Run **`GloriousRepublicModLoader.exe`**.
 3. Check the detected WRSR version in the top bar (if your game is in a custom location, set `SOVIET64.exe` under **Settings**).
 4. Enable the mods you want in **Mods & Load Order** (and configure any optional packs in **Asset Overrides**).
-5. Click **▶ Launch WRSR**. Press **`F9`** (or your custom hotkey) in-game to open **GRML Mod Settings**.
+5. Click **▶ Launch WRSR** (or **▶ Continue `<SaveName>`** to load your latest save directly). Press **`F9`** (or your custom hotkey) in-game to open **GRML Mod Settings**.
 
 ### Where Your Data Is Stored
 All user files live in `%LOCALAPPDATA%\GRML`:
@@ -74,6 +78,7 @@ GRML provides a pure-C ABI (`include/grml_api.h`), declarative UI schemas (`*.ui
 - [Architecture Overview](docs/ARCHITECTURE.md)
 - [Plugin SDK (`include/grml_api.h`)](docs/PLUGIN_SDK.md)
 - [Offsets, PE-Hash Caching & `gen_sig.py`](docs/OFFSETS_AND_SIGNATURES.md)
+- [Direct-to-Save Launch & Intro Skip (`SOVIET64.exe` `1.2.0.9`)](docs/DIRECT_SAVE_LOAD.md)
 - [Declarative & Auto-Built UI Schema](docs/DECLARATIVE_UI_SCHEMA.md)
 - [Hooking & Performance Rules](docs/HOOKING_AND_PERFORMANCE_RULES.md)
 - [Repository Guidelines (`AGENTS.md`)](AGENTS.md)
