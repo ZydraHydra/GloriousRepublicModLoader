@@ -215,6 +215,7 @@ class AppStore {
 	chkWorkshop = $state(true);
 	chkWip = $state(true);
 	chkMenuStatus = $state(true);
+	chkSkipIntro = $state(true);
 	chkVfsEnabled = $state(true);
 	overlayHotkey = $state('F9');
 
@@ -283,6 +284,7 @@ class AppStore {
 		const gen = this.grmlIni.general ?? {};
 		await i18n.init(gen.language, data.discovery?.gameLanguage ?? '');
 		this.chkMenuStatus = gen.show_menu_status !== '0';
+		this.chkSkipIntro = gen.skip_intro_logos !== '0';
 		this.chkWorkshop = gen.scan_workshop !== '0';
 		this.chkWip = gen.scan_workshop_wip !== '0';
 		this.chkVfsEnabled = this.vfs.enabled !== false;
@@ -321,6 +323,7 @@ class AppStore {
 		const general = {
 			game_path: this.gameExeInput.trim(),
 			show_menu_status: this.chkMenuStatus ? '1' : '0',
+			skip_intro_logos: this.chkSkipIntro ? '1' : '0',
 			scan_workshop: this.chkWorkshop ? '1' : '0',
 			scan_workshop_wip: this.chkWip ? '1' : '0',
 			overlay_hotkey: this.overlayHotkey || 'F9',

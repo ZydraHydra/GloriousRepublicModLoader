@@ -1,9 +1,46 @@
 <script lang="ts">
 	import { app } from '$lib/stores/app.svelte';
+	import { i18n, t } from '$lib/i18n/index.svelte';
 	import { openExternalUrl } from '$lib/utils';
 	import { Badge, Button, PanelCard, Select, TextInput, ToggleSwitch } from '$lib/components/ui';
 
 	let listeningHotkey = $state(false);
+
+	const languageOptions = $derived.by(() => {
+		const detected = i18n.detectedGameLocale;
+		const autoLabel = detected
+			? t('settings.languageAutoDetected', { code: detected })
+			: t('settings.languageAuto');
+		return [
+			{ value: 'auto', label: autoLabel },
+			...i18n.available.map((l) => ({
+				value: l.code,
+				label: l.nativeName && l.nativeName !== l.name ? `${l.nativeName} (${l.name})` : l.name
+			}))
+		];
+	});
+
+	async function onLanguageChange(code: string) {
+		await i18n.setLocale(code);
+		await app.saveGrmlIni();
+		await app.fetchState();
+		if (i18n.setting === 'auto') {
+			app.setStatus(
+				t('settings.languageChangedStatus', {
+					language: i18n.detectedGameLocale
+						? t('settings.languageAutoDetected', { code: i18n.detectedGameLocale })
+						: t('settings.languageAuto')
+				})
+			);
+			return;
+		}
+		const chosen = i18n.available.find((l) => l.code === i18n.locale);
+		app.setStatus(
+			t('settings.languageChangedStatus', {
+				language: chosen?.nativeName || chosen?.name || i18n.locale
+			})
+		);
+	}
 
 	const hotkeyPresets = [
 		'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12',
@@ -45,7 +82,7 @@
 			if (mapped) {
 				app.overlayHotkey = mapped;
 				await app.saveGrmlIni();
-				app.setStatus(`In-game menu hotkey set to ${mapped}.`);
+				app.setStatus(t('settings.hotkeySetStatus', { key: mapped }));
 			}
 		};
 		window.addEventListener('keydown', onKeyDown, true);
@@ -53,8 +90,8 @@
 
 	const verLabel = $derived(
 		app.discovery && app.discovery.gameVersion !== 'unknown'
-			? `WRSR ${app.discovery.gameVersion}`
-			: 'WRSR (unrecognized build)'
+			? t('settings.wrsrVersion', { version: app.discovery.gameVersion })
+			: t('settings.wrsrUnrecognized')
 	);
 
 	async function browseGame() {
@@ -64,7 +101,7 @@
 			app.gameExeInput = data.path;
 			await app.saveGrmlIni();
 			await app.fetchState();
-			app.setStatus(`Game executable set to ${data.path}`);
+			app.setStatus(t('settings.gameExeSetStatus', { path: data.path }));
 		}
 	}
 
@@ -80,64 +117,78 @@
 </script>
 
 <div class="panel">
-	<h2>Loader Settings</h2>
+	<h2>{t('settings.title')}</h2>
 	<p class="muted" style="margin:0 0 14px 0;">
-		Changes are saved automatically to <code>grml.ini</code> in <code>%LOCALAPPDATA%\GRML</code>.
+		{@html t('settings.subtitle')}
 	</p>
 
 	<div class="schema-form">
 		<PanelCard>
 			<div class="control-top">
-				<div class="control-label">Game Executable (<code>SOVIET64.exe</code>)</div>
+				<div class="control-label">{t('settings.languageLabel')}</div>
+				<Select
+					value={i18n.setting}
+					options={languageOptions}
+					onchange={onLanguageChange}
+				/>
+			</div>
+			<div class="control-tip">
+				{@html t('settings.languageTip')}
+			</div>
+		</PanelCard>
+
+		<PanelCard>
+			<div class="control-top">
+				<div class="control-label">{@html t('settings.gameExeLabel')}</div>
 				<span class="pill">{verLabel}</span>
 			</div>
 			<div class="control-tip">
-				Path to your <code>SOVIET64.exe</code> installation used for launching, version detection, and Workshop discovery.
+				{@html t('settings.gameExeTip')}
 			</div>
 			<div class="control-input-row">
 				<TextInput
 					bind:value={app.gameExeInput}
 					mono={true}
-					placeholder="Path to SOVIET64.exe"
+					placeholder={t('settings.gameExePlaceholder')}
 					onchange={onPathChange}
 				/>
-				<Button onclick={browseGame}>Set Path</Button>
+				<Button onclick={browseGame}>{t('settings.setPathBtn')}</Button>
 			</div>
 		</PanelCard>
 
 		<PanelCard>
 			<div class="control-top">
-				<div class="control-label">Scan Steam Workshop (784150)</div>
+				<div class="control-label">{t('settings.scanWorkshopLabel')}</div>
 				<ToggleSwitch bind:checked={app.chkWorkshop} onchange={onDiscoveryToggle} />
 			</div>
 			<div class="control-tip">
-				Automatically discover DLL plugins inside subscribed Steam Workshop mod folders (enabled by default).
+				{t('settings.scanWorkshopTip')}
 			</div>
 		</PanelCard>
 
 		<PanelCard>
 			<div class="control-top">
-				<div class="control-label">Scan Local Development Folder (<code>workshop_wip</code>)</div>
+				<div class="control-label">{@html t('settings.scanWipLabel')}</div>
 				<ToggleSwitch bind:checked={app.chkWip} onchange={onDiscoveryToggle} />
 			</div>
 			<div class="control-tip">
-				Discover local in-development DLL mods inside <code>media_soviet\workshop_wip\</code> (enabled by default).
+				{@html t('settings.scanWipTip')}
 			</div>
 		</PanelCard>
 
 		<PanelCard>
 			<div class="control-top">
-				<div class="control-label">Enable Runtime Asset Redirection</div>
+				<div class="control-label">{t('settings.vfsLabel')}</div>
 				<ToggleSwitch bind:checked={app.chkVfsEnabled} onchange={() => app.saveVfsConfig()} />
 			</div>
 			<div class="control-tip">
-				Non-destructive virtual filesystem redirection for <code>media_soviet\</code> and <code>override\</code> packs (saved to <code>grml_vfs.ini</code>).
+				{@html t('settings.vfsTip')}
 			</div>
 		</PanelCard>
 
 		<PanelCard>
 			<div class="control-top">
-				<div class="control-label">In-Game Mod Settings Hotkey</div>
+				<div class="control-label">{t('settings.hotkeyLabel')}</div>
 				<div style="display:flex;align-items:center;gap:8px;">
 					<Select
 						bind:value={app.overlayHotkey}
@@ -149,29 +200,39 @@
 						size="sm"
 						onclick={startRebind}
 					>
-						{listeningHotkey ? 'Press any key... (Esc to cancel)' : 'Rebind Key'}
+						{listeningHotkey ? t('settings.pressAnyKey') : t('settings.rebindKey')}
 					</Button>
 				</div>
 			</div>
 			<div class="control-tip">
-				Key used in-game to toggle the GRML Mod Settings overlay (saved as <code>overlay_hotkey</code> in <code>grml.ini</code>; takes effect on next game launch).
+				{@html t('settings.hotkeyTip')}
 			</div>
 		</PanelCard>
 
 		<PanelCard>
 			<div class="control-top">
-				<div class="control-label">Show GRML Tag on Main Menu</div>
+				<div class="control-label">{t('settings.menuTagLabel')}</div>
 				<ToggleSwitch bind:checked={app.chkMenuStatus} onchange={() => app.saveGrmlIni()} />
 			</div>
 			<div class="control-tip">
-				Appends <code>| GRML 2.0.0</code> to the in-game main menu version string so you can confirm GRML is active.
+				{@html t('settings.menuTagTip')}
+			</div>
+		</PanelCard>
+
+		<PanelCard>
+			<div class="control-top">
+				<div class="control-label">{t('settings.skipIntroLabel')}</div>
+				<ToggleSwitch bind:checked={app.chkSkipIntro} onchange={() => app.saveGrmlIni()} />
+			</div>
+			<div class="control-tip">
+				{@html t('settings.skipIntroTip')}
 			</div>
 		</PanelCard>
 
 		<PanelCard>
 			<div class="control-top">
 				<div class="control-label">
-					Offset Definitions (<code>grml_offsets.ini</code>)
+					{@html t('settings.offsetsLabel')}
 					{#if app.discovery?.offsetsHash}
 						<span class="muted" style="font-weight:400;margin-left:6px;">{app.discovery.offsetsHash}</span>
 					{/if}
@@ -180,26 +241,26 @@
 					{#if app.offsetsOtaResult}
 						{#if app.offsetsOtaResult.ok}
 							<Badge variant={app.offsetsOtaResult.updated ? 'grml' : 'ready'}>
-								{app.offsetsOtaResult.updated ? 'Updated' : 'Up to date'}
+								{app.offsetsOtaResult.updated ? t('settings.offsetsUpdatedBadge') : t('settings.offsetsUpToDateBadge')}
 							</Badge>
 						{:else}
-							<Badge variant="warn">{app.offsetsOtaResult.error || 'OTA failed'}</Badge>
+							<Badge variant="warn">{app.offsetsOtaResult.error || t('settings.offsetsOtaFailedBadge')}</Badge>
 						{/if}
 					{/if}
 					<Button size="sm" disabled={app.updatingOffsets} onclick={() => app.updateOffsetsOta()}>
-						{app.updatingOffsets ? 'Updating...' : 'Update Offsets (OTA)'}
+						{app.updatingOffsets ? t('common.updating') : t('settings.updateOffsetsBtn')}
 					</Button>
 				</div>
 			</div>
 			<div class="control-tip">
-				Downloads the latest <code>config/grml_offsets.ini</code> from GitHub and invalidates the PE-hash RVA cache.
+				{@html t('settings.offsetsTip')}
 			</div>
 		</PanelCard>
 
 		<PanelCard>
 			<div class="control-top">
 				<div class="control-label">
-					Launcher Updates
+					{t('settings.updatesLabel')}
 					{#if app.discovery?.loaderVersion}
 						<span class="muted" style="font-weight:400;margin-left:6px;">v{app.discovery.loaderVersion}</span>
 					{/if}
@@ -207,29 +268,29 @@
 				<div style="display:flex;align-items:center;gap:8px;">
 					{#if app.updateInfo?.ok}
 						{#if app.updateInfo.updateAvailable}
-							<Badge variant="grml">Update v{app.updateInfo.latestVersion}</Badge>
+							<Badge variant="grml">{t('settings.updateBadge', { version: app.updateInfo.latestVersion ?? '' })}</Badge>
 							{#if app.updateInfo.releaseUrl}
 								<Button
 									variant="primary"
 									size="sm"
 									onclick={() => openExternalUrl(app.updateInfo!.releaseUrl!)}
 								>
-									Download ↗
+									{t('settings.downloadBtn')}
 								</Button>
 							{/if}
 						{:else}
-							<Badge variant="ready">Up to date</Badge>
+							<Badge variant="ready">{t('settings.upToDateBadge')}</Badge>
 						{/if}
 					{:else if app.updateInfo && !app.updateInfo.ok}
-						<Badge variant="warn">{app.updateInfo.error || 'Check failed'}</Badge>
+						<Badge variant="warn">{app.updateInfo.error || t('settings.checkFailedBadge')}</Badge>
 					{/if}
 					<Button size="sm" disabled={app.checkingUpdate} onclick={() => app.checkForUpdates(true)}>
-						{app.checkingUpdate ? 'Checking...' : 'Check for Updates'}
+						{app.checkingUpdate ? t('common.checking') : t('settings.checkUpdatesBtn')}
 					</Button>
 				</div>
 			</div>
 			<div class="control-tip">
-				Checks <code>ZydraHydra/GloriousRepublicModLoader</code> releases on GitHub against your installed version.
+				{@html t('settings.updatesTip')}
 			</div>
 		</PanelCard>
 	</div>
