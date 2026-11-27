@@ -145,19 +145,12 @@ std::string readSessionLastSave(const std::filesystem::path& dataDir)
     return {};
 }
 
-std::string findMostRecentSaveFolder(const std::string& discoverJson, const std::filesystem::path& dataDir)
+std::string findMostRecentSaveFolderFromGameDir(const std::filesystem::path& gameDir,
+                                                const std::filesystem::path& dataDir)
 {
-    const auto parsed = grml::parseJson(discoverJson);
-    std::filesystem::path gameExe;
-    if (parsed && parsed->isObject()) {
-        if (const auto* g = parsed->get("gameExe")) {
-            const std::string gs = g->asString();
-            if (!gs.empty()) gameExe = std::filesystem::path(grml::utf8ToWide(gs));
-        }
-    }
-    if (gameExe.empty() || !gameExe.has_parent_path()) return {};
+    if (gameDir.empty()) return {};
 
-    const std::filesystem::path savesRoot = gameExe.parent_path() / L"media_soviet" / L"save";
+    const std::filesystem::path savesRoot = gameDir / L"media_soviet" / L"save";
     std::error_code ec;
     std::filesystem::file_time_type bestTime{};
     std::string bestName;
@@ -174,14 +167,33 @@ std::string findMostRecentSaveFolder(const std::string& discoverJson, const std:
             }
         }
     }
-    if (!bestName.empty()) return bestName;
 
-    const std::string fallback = readSessionLastSave(dataDir);
-    if (!fallback.empty() &&
-        std::filesystem::exists(savesRoot / grml::utf8ToWide(fallback) / L"header.bin", ec)) {
-        return fallback;
+    const std::string sessionSave = readSessionLastSave(dataDir);
+    if (!sessionSave.empty() &&
+        std::filesystem::exists(savesRoot / grml::utf8ToWide(sessionSave) / L"header.bin", ec)) {
+        const auto sessTime = std::filesystem::last_write_time(dataDir / L"grml_session.json", ec);
+        if (bestName.empty() || (!ec && sessTime > bestTime)) {
+            return sessionSave;
+        }
     }
-    return {};
+    return bestName;
+}
+
+std::filesystem::path g_cachedGameDir;
+
+std::string findMostRecentSaveFolder(const std::string& discoverJson, const std::filesystem::path& dataDir)
+{
+    const auto parsed = grml::parseJson(discoverJson);
+    std::filesystem::path gameExe;
+    if (parsed && parsed->isObject()) {
+        if (const auto* g = parsed->get("gameExe")) {
+            const std::string gs = g->asString();
+            if (!gs.empty()) gameExe = std::filesystem::path(grml::utf8ToWide(gs));
+        }
+    }
+    if (gameExe.empty() || !gameExe.has_parent_path()) return {};
+    g_cachedGameDir = gameExe.parent_path();
+    return findMostRecentSaveFolderFromGameDir(g_cachedGameDir, dataDir);
 }
 
 std::string toLowerAscii(std::string s)
@@ -548,6 +560,18 @@ void handleClient(SOCKET client)
             ",\"logTail\":" + logJson +
             ",\"playlists\":" + playlistsJson +
             ",\"latestSave\":\"" + grml::launcher_api::jsonEscape(latestSave) + "\"}";
+        sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8", resp);
+    } else if (method == "GET" && path == "/api/latest-save") {
+        std::lock_guard lock(g_apiMutex);
+        std::filesystem::path gameDir = g_cachedGameDir;
+        const auto it = query.find("game");
+        if (it != query.end() && !it->second.empty()) {
+            const std::filesystem::path gameOverride(grml::utf8ToWide(it->second));
+            if (gameOverride.has_parent_path()) gameDir = gameOverride.parent_path();
+        }
+        const std::string latestSave = findMostRecentSaveFolderFromGameDir(gameDir, dataDir);
+        const std::string resp =
+            "{\"latestSave\":\"" + grml::launcher_api::jsonEscape(latestSave) + "\"}";
         sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8", resp);
     } else if (method == "GET" && path == "/api/check-update") {
         sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8", checkGitHubReleaseJson());

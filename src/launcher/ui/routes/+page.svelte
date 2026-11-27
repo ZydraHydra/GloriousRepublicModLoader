@@ -43,7 +43,11 @@
 		app.fetchState().then(() => {
 			app.checkForUpdates(false);
 		});
+		const latestSaveTimer = setInterval(() => {
+			app.refreshLatestSave();
+		}, 5000);
 		return () => {
+			clearInterval(latestSaveTimer);
 			if (audioEl) {
 				audioEl.pause();
 				audioEl = null;

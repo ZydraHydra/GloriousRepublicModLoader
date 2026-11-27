@@ -202,6 +202,7 @@ class AppStore {
 
 	private diagPollInFlight = false;
 	private diagTimer: ReturnType<typeof setInterval> | null = null;
+	private latestSavePollInFlight = false;
 
 	setStatus(msg: string) {
 		this.statusToast = msg;
@@ -245,6 +246,27 @@ class AppStore {
 		this.overlayHotkey = (gen.overlay_hotkey || 'F9').trim() || 'F9';
 
 		this.setStatus(`Loaded ${data.discovery?.mods?.length ?? 0} mod(s).`);
+	}
+
+	async refreshLatestSave() {
+		if (this.latestSavePollInFlight) return;
+		this.latestSavePollInFlight = true;
+		try {
+			const qs = this.gameExeInput.trim()
+				? `?game=${encodeURIComponent(this.gameExeInput.trim())}`
+				: '';
+			const resp = await fetch(`/api/latest-save${qs}`);
+			if (!resp.ok) return;
+			const data = await resp.json();
+			const next = data.latestSave ?? '';
+			if (next !== this.latestSave) {
+				this.latestSave = next;
+			}
+		} catch {
+			// Ignore transient poll errors while server shuts down
+		} finally {
+			this.latestSavePollInFlight = false;
+		}
 	}
 
 	async saveGrmlIni() {
