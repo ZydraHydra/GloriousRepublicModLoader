@@ -49,7 +49,7 @@ uint32_t findLocalExportRva(const std::filesystem::path& dllPath, const char* ex
     return rva;
 }
 
-std::vector<wchar_t> buildSanitizedChildEnvIfNeeded()
+std::vector<wchar_t> buildSanitizedChildEnvIfNeeded(const std::vector<std::string>& tempDisabledIds)
 {
     auto getEnvStr = [](const wchar_t* name) -> std::wstring {
         wchar_t buf[256]{};
@@ -63,7 +63,7 @@ std::vector<wchar_t> buildSanitizedChildEnvIfNeeded()
     const std::wstring appId     = getEnvStr(L"SteamAppId");
     const std::wstring gameId    = getEnvStr(L"SteamGameId");
     const std::wstring overlayId = getEnvStr(L"SteamOverlayGameId");
-    if (!isForeign(appId) && !isForeign(gameId) && !isForeign(overlayId)) {
+    if (!isForeign(appId) && !isForeign(gameId) && !isForeign(overlayId) && tempDisabledIds.empty()) {
         return {};
     }
 
@@ -80,12 +80,22 @@ std::vector<wchar_t> buildSanitizedChildEnvIfNeeded()
         const std::wstring key = (eq != std::wstring::npos) ? entry.substr(0, eq) : entry;
         if (_wcsicmp(key.c_str(), L"SteamAppId") == 0 ||
             _wcsicmp(key.c_str(), L"SteamGameId") == 0 ||
-            _wcsicmp(key.c_str(), L"SteamOverlayGameId") == 0) {
+            _wcsicmp(key.c_str(), L"SteamOverlayGameId") == 0 ||
+            _wcsicmp(key.c_str(), L"GRML_TEMP_DISABLED_MODS") == 0) {
             continue;
         }
         entries.push_back(std::move(entry));
     }
     FreeEnvironmentStringsW(rawEnv);
+
+    if (!tempDisabledIds.empty()) {
+        std::string joined;
+        for (size_t i = 0; i < tempDisabledIds.size(); ++i) {
+            if (i > 0) joined += ',';
+            joined += tempDisabledIds[i];
+        }
+        entries.push_back(L"GRML_TEMP_DISABLED_MODS=" + grml::utf8ToWide(joined));
+    }
 
     std::vector<wchar_t> block;
     for (const auto& e : entries) {
@@ -99,7 +109,8 @@ std::vector<wchar_t> buildSanitizedChildEnvIfNeeded()
 } // namespace
 
 LaunchResult launchAndInjectWrsr(const std::filesystem::path& loaderDir,
-                                 const std::filesystem::path& gameExe)
+                                 const std::filesystem::path& gameExe,
+                                 const std::vector<std::string>& tempDisabledIds)
 {
     LaunchResult res{};
     std::error_code ec;
@@ -123,7 +134,7 @@ LaunchResult launchAndInjectWrsr(const std::filesystem::path& loaderDir,
     std::wstring cmdLine = L"\"" + gameExe.wstring() + L"\"";
     std::wstring workDir = gameExe.parent_path().wstring();
 
-    std::vector<wchar_t> envBlock = buildSanitizedChildEnvIfNeeded();
+    std::vector<wchar_t> envBlock = buildSanitizedChildEnvIfNeeded(tempDisabledIds);
     DWORD flags = NORMAL_PRIORITY_CLASS | CREATE_SUSPENDED;
     LPVOID envPtr = nullptr;
     if (!envBlock.empty()) {

@@ -869,4 +869,236 @@ std::string serializeUiSchemaJson(const UiSchema& schema)
     return out;
 }
 
+namespace {
+
+void flattenJsonTranslations(const JsonValue& node,
+                             const std::string& prefix,
+                             TranslationMap& out)
+{
+    if (node.isObject()) {
+        for (const auto& [k, v] : std::get<JsonObject>(node.data)) {
+            if (k == "_meta") continue;
+            const std::string next = prefix.empty() ? k : (prefix + "." + k);
+            flattenJsonTranslations(v, next, out);
+        }
+    } else if (std::holds_alternative<std::string>(node.data)) {
+        if (!prefix.empty()) {
+            out[prefix] = std::get<std::string>(node.data);
+        }
+    }
+}
+
+bool mergeLocaleFile(const std::filesystem::path& filePath, TranslationMap& out)
+{
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(filePath, ec)) return false;
+    std::string bytes;
+    if (!readFileBytesW(filePath, bytes)) return false;
+    const auto root = parseJson(bytes);
+    if (!root || !root->isObject()) return false;
+    flattenJsonTranslations(*root, "", out);
+    return true;
+}
+
+} // namespace
+
+bool loadModLocaleDictionary(const std::filesystem::path& localesDir,
+                             const std::string& langCode,
+                             TranslationMap& outMap)
+{
+    outMap.clear();
+    std::error_code ec;
+    if (localesDir.empty() || !std::filesystem::is_directory(localesDir, ec)) {
+        return false;
+    }
+
+    bool any = mergeLocaleFile(localesDir / L"en.json", outMap);
+
+    std::string norm = langCode;
+    for (char& c : norm) {
+        if (c == '_') c = '-';
+    }
+    if (!norm.empty() && _stricmp(norm.c_str(), "en") != 0) {
+        const auto exactPath = localesDir / (utf8ToWide(norm) + L".json");
+        if (mergeLocaleFile(exactPath, outMap)) {
+            any = true;
+        } else {
+            const size_t dash = norm.find('-');
+            if (dash != std::string::npos && dash > 0) {
+                const auto basePath = localesDir / (utf8ToWide(norm.substr(0, dash)) + L".json");
+                if (mergeLocaleFile(basePath, outMap)) {
+                    any = true;
+                }
+            }
+        }
+    }
+    return any;
+}
+
+void applyModUiTranslations(UiSchema& schema,
+                            const std::filesystem::path& dllPath,
+                            const std::string& langCode)
+{
+    if (!schema.valid || dllPath.empty()) return;
+    TranslationMap dict;
+    if (!loadModLocaleDictionary(dllPath.parent_path() / L"locales", langCode, dict) || dict.empty()) {
+        return;
+    }
+
+    auto resolveRef = [&](std::string& field) {
+        if (field.size() > 1 && field[0] == '@') {
+            if (const auto it = dict.find(field.substr(1)); it != dict.end()) {
+                field = it->second;
+            }
+        }
+    };
+
+    if (schema.tabTitle.size() > 1 && schema.tabTitle[0] == '@') {
+        resolveRef(schema.tabTitle);
+    } else if (const auto it = dict.find("tabTitle"); it != dict.end() && !it->second.empty()) {
+        schema.tabTitle = it->second;
+    }
+
+    for (auto& c : schema.controls) {
+        resolveRef(c.label);
+        resolveRef(c.tooltip);
+
+        if (!c.key.empty()) {
+            const std::string base = c.section.empty()
+                ? ("controls." + c.key)
+                : ("controls." + c.section + "." + c.key);
+            if (const auto it = dict.find(base + ".label"); it != dict.end() && !it->second.empty()) {
+                c.label = it->second;
+            }
+            if (const auto it = dict.find(base + ".tooltip"); it != dict.end()) {
+                c.tooltip = it->second;
+            }
+        }
+    }
+}
+
+namespace {
+
+std::string toLowerAsciiTrim(std::string_view sv)
+{
+    while (!sv.empty() && (sv.front() == ' ' || sv.front() == '\t' || sv.front() == '\r' || sv.front() == '\n')) {
+        sv.remove_prefix(1);
+    }
+    while (!sv.empty() && (sv.back() == ' ' || sv.back() == '\t' || sv.back() == '\r' || sv.back() == '\n')) {
+        sv.remove_suffix(1);
+    }
+    std::string out(sv);
+    for (char& c : out) {
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + ('a' - 'A'));
+    }
+    return out;
+}
+
+std::string mapWrsrLangToIso(std::string_view raw)
+{
+    const std::string lo = toLowerAsciiTrim(raw);
+    if (lo.empty() || lo == "auto" || lo == "default") return {};
+
+    struct LangMap {
+        const char* wrsr;
+        const char* iso;
+    };
+    static constexpr LangMap kTable[] = {
+        {"english",    "en"},
+        {"german",     "de"},
+        {"deutsch",    "de"},
+        {"russian",    "ru"},
+        {"polish",     "pl"},
+        {"czech",      "cs"},
+        {"slovak",     "sk"},
+        {"french",     "fr"},
+        {"spanish",    "es"},
+        {"latam",      "es"},
+        {"italian",    "it"},
+        {"schinese",   "zh-CN"},
+        {"chinese",    "zh-CN"},
+        {"tchinese",   "zh-TW"},
+        {"japanese",   "ja"},
+        {"koreana",    "ko"},
+        {"korean",     "ko"},
+        {"ukrainian",  "uk"},
+        {"hungarian",  "hu"},
+        {"portuguese", "pt"},
+        {"brazilian",  "pt-BR"},
+        {"turkish",    "tr"},
+        {"dutch",      "nl"},
+        {"romanian",   "ro"},
+        {"bulgarian",  "bg"},
+    };
+    for (const auto& m : kTable) {
+        if (lo == m.wrsr) return m.iso;
+    }
+    if (lo.size() == 2) return lo;
+    return {};
+}
+
+std::string parseSteamManifestLanguage(const std::filesystem::path& acfPath)
+{
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(acfPath, ec)) return {};
+    std::string text;
+    if (!readFileBytesW(acfPath, text)) return {};
+
+    size_t pos = 0;
+    while (pos < text.size()) {
+        const size_t lineEnd = text.find('\n', pos);
+        const std::string_view line(text.data() + pos,
+                                    (lineEnd == std::string::npos) ? (text.size() - pos) : (lineEnd - pos));
+        pos = (lineEnd == std::string::npos) ? text.size() : (lineEnd + 1);
+
+        const size_t q1 = line.find("\"language\"");
+        if (q1 == std::string_view::npos) continue;
+        const size_t v1 = line.find('"', q1 + 10);
+        if (v1 == std::string_view::npos) continue;
+        const size_t v2 = line.find('"', v1 + 1);
+        if (v2 == std::string_view::npos) continue;
+        const std::string iso = mapWrsrLangToIso(line.substr(v1 + 1, v2 - v1 - 1));
+        if (!iso.empty()) return iso;
+    }
+    return {};
+}
+
+} // namespace
+
+std::string detectWrsrGameLanguage(const std::filesystem::path& gameDir)
+{
+    if (gameDir.empty()) return {};
+    std::error_code ec;
+    const std::filesystem::path cfgPath = gameDir / L"media_soviet" / L"config.ini";
+    if (std::filesystem::is_regular_file(cfgPath, ec)) {
+        std::string text;
+        if (readFileBytesW(cfgPath, text)) {
+            size_t pos = 0;
+            while (pos < text.size()) {
+                const size_t lineEnd = text.find('\n', pos);
+                const std::string_view line(text.data() + pos,
+                                            (lineEnd == std::string::npos) ? (text.size() - pos) : (lineEnd - pos));
+                pos = (lineEnd == std::string::npos) ? text.size() : (lineEnd + 1);
+
+                constexpr std::string_view kPrefix = "$TEXT LANGUAGE2 ";
+                const size_t hit = line.find(kPrefix);
+                if (hit != std::string_view::npos) {
+                    const std::string iso = mapWrsrLangToIso(line.substr(hit + kPrefix.size()));
+                    if (!iso.empty()) return iso;
+                    break; // explicitly "auto" -> check Steam appmanifest below
+                }
+            }
+        }
+    }
+
+    // When WRSR is set to "$TEXT LANGUAGE2 auto" (the default), Steam's
+    // appmanifest_784150.acf stores the selected game language under UserConfig.
+    const std::filesystem::path steamAppsDir = gameDir.parent_path().parent_path();
+    if (!steamAppsDir.empty()) {
+        const std::string steamLang = parseSteamManifestLanguage(steamAppsDir / L"appmanifest_784150.acf");
+        if (!steamLang.empty()) return steamLang;
+    }
+    return {};
+}
+
 } // namespace grml

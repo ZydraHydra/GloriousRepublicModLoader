@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { app } from '$lib/stores/app.svelte';
+	import { t } from '$lib/i18n/index.svelte';
 	import { SectionHeader } from '$lib/components/ui';
 
 	const exampleYaml = `tabTitle: My Mod Settings
@@ -32,16 +33,13 @@ controls:
 </script>
 
 <div class="panel">
-	<h2>Zero-Code Declarative UI for External Mods</h2>
+	<h2>{t('schemaHelp.title')}</h2>
 	<p>
-		External mods (including legacy TesmioLoader, RML v1, or raw DLLs without GRML C++ integration)
-		can ship a tiny <code>&lt;ModName&gt;.ui.yaml</code> or <code>&lt;ModName&gt;.ui.json</code> beside their DLL,
-		or include a <code>"settingsUi"</code> block in <code>&lt;ModName&gt;.grml.json</code>.
+		{@html t('schemaHelp.p1')}
 	</p>
 	<p>
-		GRML automatically renders those controls <strong>both here in the Launcher</strong> and
-		<strong>in-game inside the mod menu (press <code>{app.overlayHotkey}</code>)</strong>, reading &amp; saving directly to the mod's <code>.ini</code> file.
+		{@html t('schemaHelp.p2', { hotkey: app.overlayHotkey })}
 	</p>
-	<SectionHeader title="Example: MyMod.ui.yaml" />
+	<SectionHeader title={t('schemaHelp.exampleHeader')} />
 	<pre class="code-block">{exampleYaml}</pre>
 </div>

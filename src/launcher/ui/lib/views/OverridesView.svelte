@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { app } from '$lib/stores/app.svelte';
+	import { t } from '$lib/i18n/index.svelte';
 	import { openExternalUrl } from '$lib/utils';
 	import { Badge, Button, PanelCard, SectionHeader, ToggleSwitch } from '$lib/components/ui';
 
@@ -13,29 +14,33 @@
 
 	async function reloadPacks() {
 		await app.fetchState();
-		app.setStatus('Reloaded Asset Override packs.');
+		app.setStatus(t('overrides.reloadedStatus'));
 	}
 </script>
 
 <div class="panel">
 	<div class="ov-hdr">
-		<h2 style="margin:0;">Asset Overrides (Media VFS)</h2>
+		<h2 style="margin:0;">{t('overrides.title')}</h2>
 		<div class="ov-hdr-actions">
 			<Badge>
-				{app.vfs.packs.length} pack(s) · {app.vfs.indexedFiles} file(s) · {app.vfs.conflictCount} conflict(s)
+				{t('overrides.summaryBadge', {
+					packs: app.vfs.packs.length,
+					files: app.vfs.indexedFiles,
+					conflicts: app.vfs.conflictCount
+				})}
 			</Badge>
-			<Button size="sm" onclick={reloadPacks}>↻ Reload Packs</Button>
+			<Button size="sm" onclick={reloadPacks}>{t('overrides.reloadPacks')}</Button>
 		</div>
 	</div>
 	<p class="muted" style="margin:6px 0 14px 0;">
-		Non-destructive virtual filesystem redirection for <code>media_soviet\</code> and <code>override\</code> folders or <code>.zip</code> packs. Higher packs (#1) win on file collisions.
+		{@html t('overrides.description')}
 	</p>
 
-	<SectionHeader title="Override Packs & Priority Order" />
+	<SectionHeader title={t('overrides.packsSection')} />
 	{#if app.vfs.packs.length === 0}
 		<PanelCard>
 			<span class="muted">
-				No asset override packs found in <code>&lt;GameDir&gt;\media_overrides\</code> or Steam Workshop <code>media_soviet/override</code> folders.
+				{@html t('overrides.noPacks')}
 			</span>
 		</PanelCard>
 	{:else}
@@ -55,9 +60,9 @@
 									<Badge variant={pk.source === 'Workshop' ? 'rml' : 'grml'}>{pk.source}</Badge>
 								</div>
 								<div class="muted" style="font-size:11px;margin-top:2px;">
-									<code>{pk.id}</code> · {pk.indexedFiles}/{pk.totalFiles} file(s)
+									<code>{pk.id}</code> · {t('overrides.packFiles', { indexed: pk.indexedFiles, total: pk.totalFiles })}
 									{#if pk.conflictCount > 0}
-										· <span style="color:var(--warn)">{pk.conflictCount} conflict(s)</span>
+										· <span style="color:var(--warn)">{t('overrides.packConflicts', { count: pk.conflictCount })}</span>
 									{/if}
 									{#if wsId}
 										· <button
@@ -66,7 +71,7 @@
 											style="background:none;border-top:none;border-left:none;border-right:none;padding:0;"
 											onclick={() => openExternalUrl(`https://steamcommunity.com/sharedfiles/filedetails/?id=${encodeURIComponent(wsId)}`)}
 										>
-											Workshop ↗
+											{t('overrides.workshopLink')}
 										</button>
 									{/if}
 								</div>
@@ -82,10 +87,10 @@
 		</div>
 	{/if}
 
-	<SectionHeader title="File Conflict Inspector" />
+	<SectionHeader title={t('overrides.conflictsSection')} />
 	{#if (app.vfs.conflicts || []).length === 0}
 		<PanelCard>
-			<span class="muted">No asset override conflicts detected across enabled packs.</span>
+			<span class="muted">{t('overrides.noConflicts')}</span>
 		</PanelCard>
 	{:else}
 		<div class="schema-form">
@@ -93,7 +98,7 @@
 				<PanelCard>
 					<div><code>{c.relativePath}</code></div>
 					<div class="control-tip">
-						<strong>Winner:</strong> {c.winningPack} · <strong>Overridden:</strong> {(c.overriddenPacks || []).join(', ')}
+						<strong>{t('overrides.winner')}</strong> {c.winningPack} · <strong>{t('overrides.overridden')}</strong> {(c.overriddenPacks || []).join(', ')}
 					</div>
 				</PanelCard>
 			{/each}

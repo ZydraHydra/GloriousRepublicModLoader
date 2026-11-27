@@ -35,9 +35,10 @@ struct OffsetDefinition {
     int32_t           opOffset{0};
     int32_t           instrLen{0};
     int64_t           extraOffset{0};
+    std::string       category{"General"};
     std::string       anchorXref;
     std::string       verifiedBuild;
-    bool              required{true};
+    bool              required{false};
 };
 
 struct ResolvedOffsetEntry {

@@ -2,6 +2,7 @@
 #include "common/ini_util.hpp"
 #include "common/json_min.hpp"
 #include "common/pe_scanner.hpp"
+#include "grml_api.h"
 
 #include <algorithm>
 #include <cctype>
@@ -66,6 +67,8 @@ struct ParsedManifest {
     std::vector<std::string> loadAfter;
     std::vector<std::string> loadBefore;
     std::vector<std::string> supportedGameVersions;
+    std::vector<std::string> requiredOffsets;
+    std::vector<std::string> optionalOffsets;
     std::filesystem::path    manifestPath;
     bool                     isGrmlManifest{false};
 };
@@ -119,6 +122,8 @@ std::optional<ParsedManifest> parseManifestFile(const std::filesystem::path& pat
     readList("loadBefore", "load_before", m.loadBefore);
     readList("supportedGameVersions", "supported_game_versions", m.supportedGameVersions);
     readList("gameVersions", "game_versions", m.supportedGameVersions);
+    readList("required_offsets", "requiredOffsets", m.requiredOffsets);
+    readList("optional_offsets", "optionalOffsets", m.optionalOffsets);
 
     if (m.id.empty() || m.name.empty() || m.dll.empty()) {
         outWarn = wideToUtf8(path.filename().wstring()) + ": manifest missing id/name/dll";
@@ -156,9 +161,10 @@ void collectPluginDirs(const std::filesystem::path& root,
 
 const char* loaderKindDisplayName(const DiscoveredPlugin& p) noexcept
 {
-    if (p.hasGrmlInit) return "GRML";
+    static const std::string kGrmlAbiLabel = "GRML v" + std::to_string(GRML_API_VERSION);
+    if (p.hasGrmlInit) return kGrmlAbiLabel.c_str();
     switch (p.loaderKind) {
-    case PluginLoaderKind::GrmlNative:   return "GRML";
+    case PluginLoaderKind::GrmlNative:   return kGrmlAbiLabel.c_str();
     case PluginLoaderKind::RmlNative:    return "RML v1";
     case PluginLoaderKind::TesmioLegacy: return "Tesmio v4";
     case PluginLoaderKind::RawNative:    return "Raw DLL";
@@ -203,9 +209,17 @@ DiscoveryResult discoverAllPlugins(const std::filesystem::path& loaderBaseDir,
         if (std::filesystem::is_directory(wsRoot, ec)) {
             for (const auto& item : std::filesystem::directory_iterator(wsRoot, ec)) {
                 if (!item.is_directory(ec)) continue;
-                const std::string wsId = wideToUtf8(item.path().filename().wstring());
-                // Skip RML's own Workshop folder if it contains loader binaries, unless it has plugins/
-                collectPluginDirs(item.path(), scanDirs, wsId);
+                const auto& itemDir = item.path();
+                const bool isLoaderFolder =
+                    std::filesystem::exists(itemDir / L"rml_runtime.dll", ec) ||
+                    std::filesystem::exists(itemDir / L"rml_injector.exe", ec) ||
+                    std::filesystem::exists(itemDir / L"grml_runtime.dll", ec) ||
+                    std::filesystem::exists(itemDir / L"GloriousRepublicModLoader.exe", ec);
+                const std::string wsId = isLoaderFolder
+                    ? std::string{}
+                    : wideToUtf8(itemDir.filename().wstring());
+                // Don't tag plugins inside a loader's own Workshop folder with the loader's Workshop ID
+                collectPluginDirs(itemDir, scanDirs, wsId);
             }
         }
     }
@@ -365,19 +379,22 @@ DiscoveryResult discoverAllPlugins(const std::filesystem::path& loaderBaseDir,
             auto manIt = manifestsByDll.find(dllNameLower);
             if (manIt != manifestsByDll.end()) {
                 const auto& m = manIt->second;
-                p.id               = m.id;
-                p.name             = m.name;
-                p.version          = m.version.empty() ? "1.0.0" : m.version;
-                p.author           = m.author;
-                p.description      = m.description;
-                p.manifestPath     = m.manifestPath;
-                p.defaultPriority  = m.defaultPriority;
-                p.enabledByDefault = m.enabledByDefault;
-                p.dependencies     = m.dependencies;
-                p.conflictsWith    = m.conflictsWith;
+                p.id                    = m.id;
+                p.name                  = m.name;
+                p.version               = m.version.empty() ? "1.0.0" : m.version;
+                p.author                = m.author;
+                p.description           = m.description;
+                p.manifestPath          = m.manifestPath;
+                p.hasGrmlManifest       = m.isGrmlManifest;
+                p.defaultPriority       = m.defaultPriority;
+                p.enabledByDefault      = m.enabledByDefault;
+                p.dependencies          = m.dependencies;
+                p.conflictsWith         = m.conflictsWith;
                 p.loadAfter             = m.loadAfter;
                 p.loadBefore            = m.loadBefore;
                 p.supportedGameVersions = m.supportedGameVersions;
+                p.requiredOffsets       = m.requiredOffsets;
+                p.optionalOffsets       = m.optionalOffsets;
                 p.imagePath             = findModImage(m.image);
             } else {
                 p.id        = syntheticIdFromFilename(entry.path());

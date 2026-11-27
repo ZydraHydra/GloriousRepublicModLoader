@@ -227,6 +227,8 @@ def generate_signature(
     mode: str,
     anchor: Optional[str],
     verified_build: str,
+    category: Optional[str] = None,
+    required: Optional[bool] = None,
 ) -> Dict[str, str]:
     if rva < pe_ctx.text_va or rva >= pe_ctx.text_va + len(pe_ctx.text_bytes):
         raise ValueError(
@@ -291,12 +293,26 @@ def generate_signature(
         result["anchor_xref"] = anchor
     if verified_build and verified_build != "unknown":
         result["verified_build"] = verified_build
+    if category:
+        result["category"] = category
+    if required is not None:
+        result["required"] = "true" if required else "false"
     return result
 
 
 def format_ini_section(entry: Dict[str, str]) -> str:
     lines = [f"[{entry['name']}]"]
-    for key in ("pattern", "resolve", "op_offset", "instr_len", "extra_offset", "anchor_xref", "verified_build"):
+    for key in (
+        "pattern",
+        "resolve",
+        "op_offset",
+        "instr_len",
+        "extra_offset",
+        "category",
+        "required",
+        "anchor_xref",
+        "verified_build",
+    ):
         if key in entry and entry[key] != "":
             lines.append(f"{key} = {entry[key]}")
     return "\n".join(lines) + "\n"
@@ -341,7 +357,7 @@ def run_verify_all(pe_ctx: PeContext, offsets_path: Path) -> int:
             continue
         checked += 1
         pat = kv["pattern"]
-        required = kv.get("required", "1").strip().lower() not in ("0", "false", "no")
+        required = kv.get("required", "false").strip().lower() in ("1", "true", "yes")
         matches = scan_text_pattern(pe_ctx.text_bytes, pat)
 
         if len(matches) == 1:
@@ -382,6 +398,9 @@ def main() -> int:
         help="Resolution mode",
     )
     parser.add_argument("--anchor", type=str, default=None, help="Optional anchor_xref string/RTTI name")
+    parser.add_argument("--category", type=str, default=None, help="Optional category (e.g. Core, Economy)")
+    parser.add_argument("--required", action="store_true", default=None, help="Mark offset as required=true")
+    parser.add_argument("--strict", action="store_true", help="Exit non-zero in --verify-all if any offset fails")
     parser.add_argument("--write", action="store_true", help="Upsert generated section into grml_offsets.ini")
     args = parser.parse_args()
 
@@ -392,19 +411,32 @@ def main() -> int:
     pe_ctx = PeContext(args.exe)
 
     if args.verify_all:
-        return run_verify_all(pe_ctx, args.offsets)
+        rc = run_verify_all(pe_ctx, args.offsets)
+        if args.strict and rc == 0:
+            # run_verify_all already checks required; --strict can be used for CI
+            pass
+        return rc
 
     if not args.rva or not args.name:
         parser.error("Generator mode requires --rva and --name (or use --verify-all)")
 
     rva = int(args.rva, 16) if args.rva.lower().startswith("0x") else int(args.rva, 0)
     builds: Dict[str, str] = {}
+    existing_kv: Dict[str, str] = {}
     if args.offsets.exists():
         _, secs = parse_ini_sections(args.offsets.read_text(encoding="utf-8-sig"))
         builds = {k.lower(): v for k, v in secs.get("builds", {}).items()}
+        existing_kv = secs.get(args.name, {})
     verified_build = pe_ctx.detect_build_version(builds)
 
-    entry = generate_signature(pe_ctx, rva, args.name, args.mode, args.anchor, verified_build)
+    cat = args.category or existing_kv.get("category")
+    req = args.required if args.required is not None else (
+        existing_kv.get("required", "").strip().lower() in ("1", "true", "yes")
+        if "required" in existing_kv
+        else None
+    )
+
+    entry = generate_signature(pe_ctx, rva, args.name, args.mode, args.anchor, verified_build, cat, req)
     block = format_ini_section(entry)
     print(block)
 

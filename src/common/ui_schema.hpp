@@ -10,6 +10,7 @@
 // ============================================================================
 #include <filesystem>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace grml {
@@ -76,5 +77,24 @@ UiSchema discoverModUiSchema(const std::filesystem::path& dllPath,
 
 // Serializes a UiSchema to JSON for the GRML Launcher UI.
 std::string serializeUiSchemaJson(const UiSchema& schema);
+
+// Loads flattened key->value translation pairs from `<localesDir>/en.json`
+// (fallback) overlaid with `<localesDir>/<langCode>.json`.
+using TranslationMap = std::unordered_map<std::string, std::string>;
+bool loadModLocaleDictionary(const std::filesystem::path& localesDir,
+                             const std::string& langCode,
+                             TranslationMap& outMap);
+
+// Applies `<DllDir>/locales/<lang>.json` (with `en.json` fallback) to a UiSchema,
+// supporting both `@key` references and `controls.<section>.<key>.label`/`.tooltip`.
+void applyModUiTranslations(UiSchema& schema,
+                            const std::filesystem::path& dllPath,
+                            const std::string& langCode);
+
+// Detects the language WRSR is configured to use by reading
+// `<gameDir>/media_soviet/config.ini` (`$TEXT LANGUAGE2 <lang>`) and, when set
+// to `auto`, falling back to Steam's `appmanifest_784150.acf` `"language"`.
+// Returns an ISO/BCP-47 code (e.g. "en", "de", "ru"), or "" if unknown.
+std::string detectWrsrGameLanguage(const std::filesystem::path& gameDir);
 
 } // namespace grml

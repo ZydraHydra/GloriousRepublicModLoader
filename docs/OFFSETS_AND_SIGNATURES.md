@@ -19,7 +19,8 @@ Every section (excluding `[signatures]`, `[builds]`, `[general]`, and `[profile.
 | `extra_offset` | No | `0` | Signed post-resolution byte adjustment (decimal or hex). |
 | `anchor_xref` | No | `""` | Nearby immutable string literal or RTTI class name for patch migration. |
 | `verified_build` | No | `""` | Target `SOVIET64.exe` version string (e.g. `1.2.0.9`). |
-| `required` | No | `1` | If `1`/`true`, `gen_sig.py --verify-all` exits non-zero on miss/ambiguity. |
+| `category` | No | `General` | Grouping category in the launcher Diagnostics UI and [OFFSET_CATALOG.md](OFFSET_CATALOG.md) (`Core`, `TimeAndSim`, `Economy`, `EntityManagers`, `Templates`, `SaveLoad`, `CameraAndUI`). |
+| `required` | No | `false` | If `true`/`1`, missing this offset emits an `AOB_MISSING` diagnostic card in the launcher; if `false`, it degrades silently unless an enabled mod declares it in `required_offsets`. Pass `--strict` to `gen_sig.py --verify-all` to fail on optional misses too. |
 
 ### Resolution Formulas
 - **`function_start`:** `match_addr + extra_offset`
@@ -55,11 +56,13 @@ Inspection of `SOVIET64.exe` across three installed game versions established tw
 
 1. **PE-Hash RVA Cache (`%LOCALAPPDATA%\GRML\grml_offset_cache.ini`):**
    - Computes a composite fingerprint combining `SOVIET64.exe`'s PE COFF `TimeDateStamp`, `SizeOfImage`, `AddressOfEntryPoint`, and a canonical 64-bit FNV-1a hash of the merged `grml_offsets.ini`.
-   - **Cache Hit:** Reconstructs `module_base + cached_rva` and verifies every non-wildcard byte of `pattern` within `.text` bounds in `O(1)`, marking the entry `CACHED`.
-   - **Cache Miss / Byte Mismatch:** Queues any unverified entries alongside plugin `GrmlHostApi::RegisterPatternScan` requests into a single sequential `.text` pass (`runSinglePassAobScan`), marks unique matches `OK`, and rewrites `grml_offset_cache.ini`.
+   - **Cache Hit:** Reconstructs `module_base + cached_rva` and verifies every non-wildcard byte of `pattern` within `.text` bounds in `O(1)`, marking the entry `CACHED` (or `MISSING` immediately if cached as `MISSING`).
+   - **Cache Miss / Byte Mismatch:** Queues any unverified entries alongside plugin `GrmlHostApi::RegisterPatternScan` requests into a single sequential `.text` pass (`runSinglePassAobScan`), marks unique matches `OK`, and rewrites `grml_offset_cache.ini` (recording both `OK` RVAs and `MISSING` entries).
+   - **Pre-Flight Launcher Validation:** `GloriousRepublicModLoader.exe` runs the same `O(1)` cache check / `SEC_IMAGE` `.text` scan on disk before launching `SOVIET64.exe` and cross-checks each mod's `required_offsets` / `optional_offsets` (`Ready`, `Degraded`, `Needs Offset Update`, `Legacy`).
 2. **Strict Single-Match & Graceful Degradation:**
    - Entries with `match_count != 1` are logged to `grml.log` (`[OFFSET MISSING]`) and published to `%LOCALAPPDATA%\GRML\grml_session.json` as `MISSING` without crashing `SOVIET64.exe`.
    - `GrmlHostApi::ResolveNamedOffset(section_name, &out_value)` returns `1` only for `OK` or `CACHED` entries and `0` otherwise.
+   - See [OFFSET_CATALOG.md](OFFSET_CATALOG.md) for the full 6-category verified base offset catalog and `scripts/harvest_anchors.py` anchor-harvesting workflow.
 
 ---
 

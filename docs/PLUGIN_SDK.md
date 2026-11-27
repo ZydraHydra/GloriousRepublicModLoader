@@ -57,6 +57,13 @@ Mods compiled with `/MT` can continue exporting `RmlPluginQuery` / `RmlPluginLoa
   "dependencies": [],
   "loadAfter": [],
   "loadBefore": [],
-  "conflictsWith": []
+  "conflictsWith": [],
+  "required_offsets": ["border_customs_tick"],
+  "optional_offsets": ["calendar_clock"]
 }
 ```
+
+### Pre-Init Offset Gate & Compatibility Checks
+- **`required_offsets`:** Named sections in `grml_offsets.ini` that the mod strictly requires. Both the UI Launcher (pre-flight on-disk PE scan) and `grml_runtime.dll` (Pre-Init Offset Gate before `LoadLibraryW` / `DllMain` / `GrmlPluginInit`) check these entries. If any required offset is `MISSING`, the runtime skips loading the mod cleanly and emits an `AOB_MISSING` error to `grml_session.json`.
+- **`optional_offsets`:** Named sections used for secondary features that degrade gracefully if missing (`Degraded` badge in the UI Launcher; the mod still loads).
+- Legacy `*.rml.json` manifests (and `*.grml.json` manifests omitting both fields) remain 100% supported.

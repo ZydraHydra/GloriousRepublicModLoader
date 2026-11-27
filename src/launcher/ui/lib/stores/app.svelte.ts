@@ -50,6 +50,12 @@ export interface ModItem {
 	warning: string;
 	supportedGameVersions?: string[];
 	gameVersionMismatch?: boolean;
+	hasGrmlManifest?: boolean;
+	requiredOffsets?: string[];
+	optionalOffsets?: string[];
+	missingRequiredOffsets?: string[];
+	missingOptionalOffsets?: string[];
+	offsetCompatibility?: 'ready' | 'degraded' | 'needs_update' | 'legacy';
 	uiSchema?: UiSchema | null;
 }
 
@@ -93,6 +99,7 @@ export interface OffsetDiagnosticEntry {
 	status: 'OK' | 'CACHED' | 'MISSING' | 'UNSCANNED';
 	matchCount: number;
 	resolve: string;
+	category: string;
 	verifiedBuild: string;
 	anchorXref: string;
 	required: boolean;
@@ -483,7 +490,7 @@ class AppStore {
 		}
 	}
 
-	async launchWrsr(autoLoadSave?: string) {
+	async launchWrsr(autoLoadSave?: string | null, tempDisabledIds?: string[]) {
 		await runGuardedLaunch({
 			isLocked: () => this.launchLocked,
 			setLaunching: (v) => {
@@ -493,7 +500,8 @@ class AppStore {
 			setStatus: (msg) => this.setStatus(msg),
 			fetchFn: fetch,
 			gameExe: this.gameExeInput,
-			autoLoadSave,
+			autoLoadSave: autoLoadSave || undefined,
+			tempDisabledIds,
 			launchingStatus: autoLoadSave
 				? t('status.launchingIntoSave', { save: autoLoadSave })
 				: t('status.launching'),

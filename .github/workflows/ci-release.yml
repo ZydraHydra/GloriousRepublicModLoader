@@ -30,6 +30,7 @@ jobs:
         shell: pwsh
         run: |
           npm ci
+          npm run check:i18n
           npm run check
           npm run build
 

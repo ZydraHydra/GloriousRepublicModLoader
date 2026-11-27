@@ -21,6 +21,12 @@
 			? t('header.wrsrVersion', { version: app.discovery.gameVersion })
 			: t('header.wrsrDetecting')
 	);
+	const incompatibleEnabledMods = $derived(
+		(app.discovery?.mods || []).filter(
+			(m) => m.enabled && !m.blocked && m.offsetCompatibility === 'needs_update'
+		)
+	);
+	let offsetBannerDismissed = $state(false);
 
 	let playingInternationale = $state(false);
 	let audioEl: HTMLAudioElement | null = null;
@@ -138,6 +144,39 @@
 			<Button variant="primary" disabled={app.launchLocked} onclick={() => app.launchWrsr()}>{t('header.launchWrsr')}</Button>
 		</div>
 	</header>
+
+	{#if incompatibleEnabledMods.length > 0 && !offsetBannerDismissed}
+		<div class="post-crash-banner">
+			<span>
+				Offset update required for {incompatibleEnabledMods.length} enabled mod(s):
+				{incompatibleEnabledMods
+					.map((m) => `${m.name} (${(m.missingRequiredOffsets || []).join(', ')})`)
+					.join(' · ')}
+			</span>
+			<div class="post-crash-actions">
+				<Button
+					size="sm"
+					disabled={app.updatingOffsets}
+					onclick={() => app.updateOffsetsOta()}
+				>
+					{app.updatingOffsets ? 'Checking...' : 'Check GitHub Offset Updates'}
+				</Button>
+				<Button
+					variant="primary"
+					size="sm"
+					disabled={app.launchLocked}
+					onclick={() =>
+						app.launchWrsr(
+							null,
+							incompatibleEnabledMods.map((m) => m.id)
+						)}
+				>
+					Temporarily Disable Affected Mods &amp; Play
+				</Button>
+				<Button size="sm" onclick={() => (offsetBannerDismissed = true)}>Dismiss</Button>
+			</div>
+		</div>
+	{/if}
 
 	{#if app.crashBannerVisible && app.lastCrashSaveName}
 		<div class="post-crash-banner">

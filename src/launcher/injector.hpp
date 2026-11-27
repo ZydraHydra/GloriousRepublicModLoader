@@ -15,6 +15,7 @@ struct LaunchResult {
 };
 
 LaunchResult launchAndInjectWrsr(const std::filesystem::path& loaderDir,
-                                 const std::filesystem::path& gameExe);
+                                 const std::filesystem::path& gameExe,
+                                 const std::vector<std::string>& tempDisabledIds = {});
 
 } // namespace grml::launcher

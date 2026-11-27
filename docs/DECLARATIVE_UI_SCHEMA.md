@@ -65,3 +65,45 @@ controls:
     options: [auto, manual, off]
     default: auto
 ```
+
+---
+
+## Multi-Language Support (`locales/<lang>.json`)
+
+Modders can provide translations for both the **Launcher Mod Inspector** and the **In-Game `F9` Hub** by placing JSON files in a `locales\` folder next to their DLL (`<ModDir>\locales\en.json`, `de.json`, `ru.json`, etc.). Missing keys automatically fall back to `en.json`.
+
+Two styles are supported (and can be combined):
+
+1. **Keyed by `section.key` (zero changes to `.ui.yaml`/`.ini` required):**
+   ```json
+   {
+     "tabTitle": "Meine Mod-Einstellungen",
+     "controls": {
+       "settings.enabled": {
+         "label": "Mod aktivieren",
+         "tooltip": "Hauptschalter in MyMod.ini"
+       }
+     }
+   }
+   ```
+2. **Explicit `@key` references inside `.ui.yaml` / `.ui.json`:**
+   ```yaml
+   tabTitle: "@ui.title"
+   controls:
+     - type: bool
+       section: settings
+       key: enabled
+       label: "@ui.enable_label"
+       tooltip: "@ui.enable_tip"
+   ```
+   ```json
+   {
+     "ui": {
+       "title": "Meine Mod-Einstellungen",
+       "enable_label": "Mod aktivieren",
+       "enable_tip": "Hauptschalter in MyMod.ini"
+     }
+   }
+   ```
+
+For native C++ plugins using `GrmlPluginInit(const GrmlHostApi* host)`, GRML also exposes `host->GetLanguage()`, `host->LoadTranslations(plugin_id, nullptr)`, and `host->Translate(plugin_id, "ui.key")` in `include/grml_api.h`.

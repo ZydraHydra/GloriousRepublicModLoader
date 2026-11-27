@@ -30,6 +30,7 @@ struct DiscoveredPlugin {
     std::string               sha256;
 
     PluginLoaderKind          loaderKind{PluginLoaderKind::RawNative};
+    bool                      hasGrmlManifest{false};
     bool                      hasGrmlInit{false};
     bool                      hasRmlQuery{false};
     bool                      hasRmlLoad{false};
@@ -46,6 +47,8 @@ struct DiscoveredPlugin {
     std::vector<std::string>  loadAfter;
     std::vector<std::string>  loadBefore;
     std::vector<std::string>  supportedGameVersions;
+    std::vector<std::string>  requiredOffsets;
+    std::vector<std::string>  optionalOffsets;
 
     std::string               warning;
     bool                      blockedByDependencyOrConflict{false};

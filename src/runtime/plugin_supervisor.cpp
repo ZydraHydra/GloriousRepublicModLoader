@@ -760,22 +760,80 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
     const std::vector<offsets::OffsetDefinition> offsetDefs = offsets::collectOffsetDefinitions(offsetsIni);
     bool allOffsetsCached = false;
     std::vector<void*> declMatchSites(offsetDefs.size(), nullptr);
+    std::vector<AobPatternRequest> declScans;
     {
         std::lock_guard lock(g_supMutex);
         allOffsetsCached = offsets::tryResolveFromCache(offsetCachePath, g_gamePe, offsetsIniHash,
                                                         offsetDefs, g_resolvedOffsets);
         for (size_t i = 0; i < g_resolvedOffsets.size(); ++i) {
-            if (g_resolvedOffsets[i].status != offsets::OffsetStatus::Cached) {
-                g_pendingScans.push_back({g_resolvedOffsets[i].def.name,
-                                          g_resolvedOffsets[i].def.pattern,
-                                          &declMatchSites[i],
-                                          g_resolvedOffsets[i].def.required});
+            if (g_resolvedOffsets[i].status == offsets::OffsetStatus::Unscanned) {
+                declScans.push_back({g_resolvedOffsets[i].def.name,
+                                     g_resolvedOffsets[i].def.pattern,
+                                     &declMatchSites[i],
+                                     g_resolvedOffsets[i].def.required});
             }
         }
     }
     if (allOffsetsCached && !offsetDefs.empty()) {
         logger::logMessage(GRML_LOG_INFO, "Offsets",
                            "PE-hash RVA cache hit (%zu entries verified in O(1))", offsetDefs.size());
+    } else if (!declScans.empty() && g_gamePe.textBase && g_gamePe.textSize > 0) {
+        const AobScanSummary declSum = runSinglePassAobScan(g_gamePe.textBase, g_gamePe.textSize, declScans);
+        logger::logMessage(GRML_LOG_INFO, "Offsets",
+                           "Pre-init declarative .text scan: total=%zu unique=%zu missing=%zu ambiguous=%zu",
+                           declSum.totalPatterns, declSum.uniqueMatches, declSum.missingCount, declSum.ambiguousCount);
+        std::lock_guard lock(g_supMutex);
+        for (size_t i = 0; i < g_resolvedOffsets.size(); ++i) {
+            auto& entry = g_resolvedOffsets[i];
+            if (entry.status != offsets::OffsetStatus::Unscanned) continue;
+
+            size_t foundCount = 0;
+            for (const auto& s : declScans) {
+                if (s.outAddr == &declMatchSites[i]) {
+                    foundCount = s.matchCount;
+                    break;
+                }
+            }
+            entry.matchCount = foundCount;
+            const auto* site = static_cast<const uint8_t*>(declMatchSites[i]);
+            uintptr_t resolvedVal = 0;
+            if (foundCount == 1 && site &&
+                offsets::applyOffsetResolveRule(g_gamePe, site, entry.def, resolvedVal)) {
+                entry.status        = offsets::OffsetStatus::Ok;
+                entry.matchedRva    = static_cast<uint32_t>(site - g_gamePe.base);
+                entry.resolvedValue = resolvedVal;
+            } else {
+                entry.status        = offsets::OffsetStatus::Missing;
+                entry.matchedRva    = 0;
+                entry.resolvedValue = 0;
+                if (entry.def.required) {
+                    logger::logMessage(GRML_LOG_ERROR, "Offsets",
+                                       "[AOB_MISSING] Required offset '%s' matched %zu time(s) (expected 1)",
+                                       entry.def.name.c_str(), entry.matchCount);
+                } else {
+                    logger::logMessage(GRML_LOG_INFO, "Offsets",
+                                       "Optional offset '%s' marked MISSING (matches=%zu)",
+                                       entry.def.name.c_str(), entry.matchCount);
+                }
+            }
+        }
+        if (offsets::writeOffsetCache(offsetCachePath, g_gamePe, offsetsIniHash, g_resolvedOffsets)) {
+            logger::logMessage(GRML_LOG_INFO, "Offsets", "Updated PE-hash RVA cache (grml_offset_cache.ini)");
+        }
+    }
+
+    std::vector<save_events::AobMissingError> aobMissingErrors;
+    {
+        std::lock_guard lock(g_supMutex);
+        std::vector<std::string> coreMissing;
+        for (const auto& e : g_resolvedOffsets) {
+            if (e.def.required && e.status == offsets::OffsetStatus::Missing) {
+                coreMissing.push_back(e.def.name);
+            }
+        }
+        if (!coreMissing.empty()) {
+            aobMissingErrors.push_back({"grml.core", "GRML Core", std::move(coreMissing)});
+        }
     }
 
     auto hasDeclSection = [&](const char* name) {
@@ -845,6 +903,52 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
     logger::logMessage(GRML_LOG_INFO, "Supervisor", "Discovered %zu plugin(s); %zu enabled for load",
                        disc.plugins.size(), ordered.size());
 
+    // Read optional one-shot GRML_TEMP_DISABLED_MODS passed by the Launcher
+    std::vector<std::string> tempDisabledIds;
+    {
+        wchar_t envBuf[4096]{};
+        const DWORD n = GetEnvironmentVariableW(L"GRML_TEMP_DISABLED_MODS", envBuf, _countof(envBuf));
+        if (n > 0 && n < _countof(envBuf)) {
+            const std::string raw = wideToUtf8(std::wstring_view(envBuf, n));
+            size_t pos = 0;
+            while (pos < raw.size()) {
+                const size_t comma = raw.find(',', pos);
+                std::string tok = (comma == std::string::npos) ? raw.substr(pos) : raw.substr(pos, comma - pos);
+                for (char& c : tok) {
+                    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + ('a' - 'A'));
+                }
+                if (!tok.empty()) tempDisabledIds.push_back(std::move(tok));
+                if (comma == std::string::npos) break;
+                pos = comma + 1;
+            }
+        }
+    }
+
+    auto isTempDisabled = [&](const std::string& id) -> bool {
+        std::string lo = id;
+        for (char& c : lo) {
+            if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + ('a' - 'A'));
+        }
+        for (const auto& t : tempDisabledIds) {
+            if (t == lo) return true;
+        }
+        return false;
+    };
+
+    auto isOffsetReady = [&](const std::string& name) -> bool {
+        std::string want = name;
+        for (char& c : want) {
+            if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + ('a' - 'A'));
+        }
+        std::lock_guard lock(g_supMutex);
+        for (const auto& e : g_resolvedOffsets) {
+            if (e.def.name == want) {
+                return e.status == offsets::OffsetStatus::Ok || e.status == offsets::OffsetStatus::Cached;
+            }
+        }
+        return false;
+    };
+
     // Phase 1: SEH-protected LoadLibraryW + RmlPluginLoad / TsmPluginInit / GrmlPluginInit
     uint32_t orderIdx = 1;
     std::vector<LoadedPluginRecord> records;
@@ -854,6 +958,38 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
         LoadedPluginRecord rec;
         rec.meta      = p;
         rec.loadOrder = orderIdx++;
+
+        if (isTempDisabled(p.id)) {
+            rec.failed = false;
+            rec.status = "Temporarily disabled for launch";
+            logger::logMessage(GRML_LOG_INFO, "Supervisor", "Skipping '%s' (temporarily disabled for launch)", p.id.c_str());
+            records.push_back(std::move(rec));
+            continue;
+        }
+
+        if (!p.requiredOffsets.empty()) {
+            std::vector<std::string> missingReqs;
+            for (const auto& reqName : p.requiredOffsets) {
+                if (!isOffsetReady(reqName)) {
+                    missingReqs.push_back(reqName);
+                }
+            }
+            if (!missingReqs.empty()) {
+                std::string joined;
+                for (size_t i = 0; i < missingReqs.size(); ++i) {
+                    if (i > 0) joined += ", ";
+                    joined += missingReqs[i];
+                }
+                rec.failed = true;
+                rec.status = "AOB_MISSING (" + joined + ")";
+                logger::logMessage(GRML_LOG_ERROR, "OffsetGate",
+                                   "[AOB_MISSING] Skipped loading '%s' (%s): missing required offset(s): %s",
+                                   p.name.c_str(), p.id.c_str(), joined.c_str());
+                aobMissingErrors.push_back({p.id, p.name, std::move(missingReqs)});
+                records.push_back(std::move(rec));
+                continue;
+            }
+        }
 
         if (p.blockedByDependencyOrConflict) {
             rec.failed = true;
@@ -950,49 +1086,17 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
             }
         }
 
-        // Finalize declarative offset entries & update PE-hash RVA cache on miss
+        // Publish offset resolution & AOB_MISSING diagnostics to grml_session.json
         {
             std::lock_guard lock(g_supMutex);
-            for (size_t i = 0; i < g_resolvedOffsets.size(); ++i) {
-                auto& entry = g_resolvedOffsets[i];
-                if (entry.status == offsets::OffsetStatus::Cached) continue;
-
-                size_t foundCount = 0;
-                for (const auto& s : scans) {
-                    if (s.outAddr == &declMatchSites[i]) {
-                        foundCount = s.matchCount;
-                        break;
-                    }
-                }
-                entry.matchCount = foundCount;
-                const auto* site = static_cast<const uint8_t*>(declMatchSites[i]);
-                uintptr_t resolvedVal = 0;
-                if (foundCount == 1 && site &&
-                    offsets::applyOffsetResolveRule(g_gamePe, site, entry.def, resolvedVal)) {
-                    entry.status        = offsets::OffsetStatus::Ok;
-                    entry.matchedRva    = static_cast<uint32_t>(site - g_gamePe.base);
-                    entry.resolvedValue = resolvedVal;
-                } else {
-                    entry.status        = offsets::OffsetStatus::Missing;
-                    entry.matchedRva    = 0;
-                    entry.resolvedValue = 0;
-                    logger::logMessage(GRML_LOG_WARN, "Offsets",
-                                       "[OFFSET MISSING] Section '%s' matched %zu time(s) (expected 1) — marked MISSING",
-                                       entry.def.name.c_str(), entry.matchCount);
-                }
-            }
-            if (!allOffsetsCached && !g_resolvedOffsets.empty()) {
-                if (offsets::writeOffsetCache(offsetCachePath, g_gamePe, offsetsIniHash, g_resolvedOffsets)) {
-                    logger::logMessage(GRML_LOG_INFO, "Offsets", "Updated PE-hash RVA cache (grml_offset_cache.ini)");
-                }
-            }
             save_events::SessionDiagnosticsSnapshot snap;
-            snap.gameVersion    = g_gameVersion;
-            snap.peTimestamp    = g_gamePe.timeDateStamp;
-            snap.peSizeOfImage  = static_cast<uint32_t>(g_gamePe.imageSize);
-            snap.peEntryPoint   = g_gamePe.addressOfEntryPoint;
-            snap.offsetsFnv1a64 = offsetsIniHash;
-            snap.offsets        = g_resolvedOffsets;
+            snap.gameVersion      = g_gameVersion;
+            snap.peTimestamp      = g_gamePe.timeDateStamp;
+            snap.peSizeOfImage    = static_cast<uint32_t>(g_gamePe.imageSize);
+            snap.peEntryPoint     = g_gamePe.addressOfEntryPoint;
+            snap.offsetsFnv1a64   = offsetsIniHash;
+            snap.offsets          = g_resolvedOffsets;
+            snap.aobMissingErrors = aobMissingErrors;
             save_events::publishOffsetDiagnostics(std::move(snap));
         }
     }

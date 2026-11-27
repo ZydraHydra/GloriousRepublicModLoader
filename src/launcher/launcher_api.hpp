@@ -21,7 +21,8 @@ std::vector<uint32_t> getRunningSovietPids();
 std::string buildStatusJson();
 std::string buildCrashEventsJson();
 LaunchResult launchGame(const std::filesystem::path& loaderDir,
-                        const std::filesystem::path& gameOverride);
+                        const std::filesystem::path& gameOverride,
+                        const std::vector<std::string>& tempDisabledIds = {});
 bool saveConfigFromJson(const std::filesystem::path& loaderDir,
                         const std::string& body,
                         std::string& outJson);

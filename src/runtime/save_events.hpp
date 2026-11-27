@@ -17,6 +17,12 @@
 
 namespace grml::save_events {
 
+struct AobMissingError {
+    std::string              pluginId;
+    std::string              pluginName;
+    std::vector<std::string> missingOffsets;
+};
+
 struct SessionDiagnosticsSnapshot {
     bool     hasData{false};
     std::string gameVersion;
@@ -25,6 +31,7 @@ struct SessionDiagnosticsSnapshot {
     uint32_t    peEntryPoint{0};
     uint64_t    offsetsFnv1a64{0};
     std::vector<grml::offsets::ResolvedOffsetEntry> offsets;
+    std::vector<AobMissingError> aobMissingErrors;
 };
 
 bool install(const std::filesystem::path& loaderDir = {});

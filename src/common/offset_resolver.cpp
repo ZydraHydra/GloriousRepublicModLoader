@@ -241,9 +241,11 @@ std::vector<OffsetDefinition> collectOffsetDefinitions(const IniFile& ini)
         def.opOffset      = static_cast<int32_t>(parseI64Auto(ini.getString(sec, "op_offset", "0"), 0));
         def.instrLen      = static_cast<int32_t>(parseI64Auto(ini.getString(sec, "instr_len", "0"), 0));
         def.extraOffset   = parseI64Auto(ini.getString(sec, "extra_offset", "0"), 0);
+        def.category      = ini.getString(sec, "category", "General");
+        if (def.category.empty()) def.category = "General";
         def.anchorXref    = ini.getString(sec, "anchor_xref", "");
         def.verifiedBuild = ini.getString(sec, "verified_build", "");
-        def.required      = ini.getBool(sec, "required", true);
+        def.required      = ini.getBool(sec, "required", false);
         defs.push_back(std::move(def));
     }
     return defs;
@@ -347,8 +349,15 @@ bool tryResolveFromCache(const std::filesystem::path& cachePath,
 
     bool allVerified = true;
     for (auto& entry : outEntries) {
-        uint32_t rva = 0;
         const std::string rvaStr = cacheIni.getString("rvas", entry.def.name, "");
+        if (lowerAscii(rvaStr) == "missing") {
+            entry.status        = OffsetStatus::Missing;
+            entry.matchCount    = 0;
+            entry.matchedRva    = 0;
+            entry.resolvedValue = 0;
+            continue;
+        }
+        uint32_t rva = 0;
         if (rvaStr.empty() || !parseU32Auto(rvaStr, rva) || rva >= pe.imageSize) {
             allVerified = false;
             continue;
@@ -407,6 +416,9 @@ bool writeOffsetCache(const std::filesystem::path& cachePath,
             out += " = ";
             out += buf;
             out += "\n";
+        } else if (entry.status == OffsetStatus::Missing) {
+            out += entry.def.name;
+            out += " = MISSING\n";
         }
     }
 

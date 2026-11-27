@@ -341,6 +341,20 @@ struct GrmlHostApi {
      * and returns 1 on success, 0 if missing/ambiguous or not yet scanned.
      * Guaranteed ready inside GrmlPostScanFn (and immediately on cache-hit boots). */
     int32_t (GRML_CALL* ResolveNamedOffset)(const char* section_name, uintptr_t* out_value);
+
+    /* Returns the active GRML launcher/UI language code from grml.ini (e.g. "en",
+     * "de", "ru"). Never returns NULL; defaults to "en". */
+    const char* (GRML_CALL* GetLanguage)(void);
+
+    /* Loads JSON translation files (`en.json` fallback + `<lang>.json`) for `plugin_id`
+     * from `locales_dir` (or `<plugin_dll_dir>/locales/` when `locales_dir` is NULL).
+     * Returns 1 if at least one locale file was loaded, 0 otherwise. */
+    int32_t (GRML_CALL* LoadTranslations)(const char* plugin_id, const wchar_t* locales_dir);
+
+    /* Looks up a translated UTF-8 string for `plugin_id` and `key` (supports dot
+     * notation for nested JSON objects). Falls back to `en.json`, then `key` itself.
+     * Returned pointer is owned by GRML and remains valid for the process lifetime. */
+    const char* (GRML_CALL* Translate)(const char* plugin_id, const char* key);
 };
 
 #ifdef __cplusplus

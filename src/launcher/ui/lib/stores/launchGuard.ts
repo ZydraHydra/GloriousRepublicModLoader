@@ -6,6 +6,7 @@ export interface LaunchDeps {
 	fetchFn: typeof fetch;
 	gameExe: string;
 	autoLoadSave?: string;
+	tempDisabledIds?: string[];
 	launchingStatus: string;
 	launchedStatus: string;
 	launchFailedStatus: string;
@@ -45,7 +46,8 @@ export async function runGuardedLaunch(deps: LaunchDeps): Promise<boolean> {
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({
 				gameExe: deps.gameExe.trim(),
-				autoLoadSave: deps.autoLoadSave || ''
+				autoLoadSave: deps.autoLoadSave || '',
+				tempDisabledIds: deps.tempDisabledIds || []
 			})
 		});
 		const data = (await resp.json()) as { ok?: boolean; message?: string };

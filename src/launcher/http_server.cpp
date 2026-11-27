@@ -12,8 +12,10 @@
 #include <ws2tcpip.h>
 #include <commdlg.h>
 #include <shellapi.h>
+#include <tlhelp32.h>
 #include <winhttp.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -26,6 +28,7 @@
 #include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace grml::http_server {
@@ -341,6 +344,85 @@ std::string checkGitHubReleaseJson()
            "\",\"updateAvailable\":" + std::string(newer ? "true" : "false") + "}";
 }
 
+std::string buildLocalesListJson(const std::filesystem::path& loaderDir,
+                                 const std::filesystem::path& dataDir)
+{
+    struct LocaleEntry {
+        std::string code;
+        std::string name;
+        std::string nativeName;
+    };
+    std::unordered_map<std::string, LocaleEntry> byCode;
+
+    auto ingestJson = [&](std::string_view fallbackCode, std::string_view bytes) {
+        const auto root = grml::parseJson(bytes);
+        if (!root || !root->isObject()) return;
+        std::string code(fallbackCode);
+        std::string name(fallbackCode);
+        std::string nativeName(fallbackCode);
+        if (const auto* meta = root->get("_meta"); meta && meta->isObject()) {
+            if (const auto* c = meta->get("code")) {
+                const auto s = c->asString();
+                if (!s.empty()) code = s;
+            }
+            if (const auto* n = meta->get("name")) {
+                const auto s = n->asString();
+                if (!s.empty()) name = s;
+            }
+            if (const auto* nn = meta->get("nativeName")) {
+                const auto s = nn->asString();
+                if (!s.empty()) nativeName = s;
+            }
+        }
+        if (code.empty()) return;
+        byCode[code] = LocaleEntry{code, name, nativeName};
+    };
+
+    for (const auto& a : grml::generated::embeddedUiAssets()) {
+        const std::string_view p(a.urlPath);
+        if (!p.starts_with("/locales/") || !p.ends_with(".json")) continue;
+        const auto rel = p.substr(9); // after "/locales/"
+        if (rel.find('/') != std::string_view::npos) continue;
+        const std::string fallbackCode(rel.substr(0, rel.size() - 5));
+        ingestJson(fallbackCode, std::string_view(reinterpret_cast<const char*>(a.data), a.size));
+    }
+
+    auto scanDir = [&](const std::filesystem::path& dir) {
+        std::error_code ec;
+        if (!std::filesystem::exists(dir, ec) || !std::filesystem::is_directory(dir, ec)) return;
+        for (const auto& ent : std::filesystem::directory_iterator(dir, ec)) {
+            if (ec || !ent.is_regular_file(ec)) continue;
+            if (ent.path().extension() != L".json") continue;
+            std::string bytes;
+            if (!grml::readFileBytesW(ent.path(), bytes)) continue;
+            const std::string fallbackCode = grml::wideToUtf8(ent.path().stem().wstring());
+            ingestJson(fallbackCode, bytes);
+        }
+    };
+
+    scanDir(loaderDir / L"locales");
+    scanDir(dataDir / L"locales");
+
+    std::vector<LocaleEntry> list;
+    list.reserve(byCode.size());
+    for (auto& [k, v] : byCode) list.push_back(std::move(v));
+    std::sort(list.begin(), list.end(), [](const LocaleEntry& a, const LocaleEntry& b) {
+        if (a.code == "en" && b.code != "en") return true;
+        if (b.code == "en" && a.code != "en") return false;
+        return a.code < b.code;
+    });
+
+    std::string out = "{\"locales\":[";
+    for (size_t i = 0; i < list.size(); ++i) {
+        if (i > 0) out += ',';
+        out += "{\"code\":\"" + grml::launcher_api::jsonEscape(list[i].code) + "\"";
+        out += ",\"name\":\"" + grml::launcher_api::jsonEscape(list[i].name) + "\"";
+        out += ",\"nativeName\":\"" + grml::launcher_api::jsonEscape(list[i].nativeName) + "\"}";
+    }
+    out += "]}";
+    return out;
+}
+
 std::string updateOffsetsOtaJson(const std::filesystem::path& loaderDir,
                                  const std::filesystem::path& dataDir)
 {
@@ -469,6 +551,229 @@ std::string updateOffsetsOtaJson(const std::filesystem::path& loaderDir,
            ",\"hash\":\"" + std::string(newBuf) + "\"" +
            ",\"entryCount\":" + std::to_string(defs.size()) +
            ",\"path\":\"" + grml::launcher_api::jsonEscape(grml::wideToUtf8(targetPath.wstring())) + "\"}";
+}
+
+bool winHttpPostForm(const wchar_t* host,
+                     const wchar_t* path,
+                     const std::string& formBody,
+                     DWORD& outStatus,
+                     std::string& outBody,
+                     std::string& outError)
+{
+    outStatus = 0;
+    outBody.clear();
+    outError.clear();
+
+    const std::wstring ua = L"GloriousRepublicModLoader/" + grml::utf8ToWide(GRML_BUILD_VERSION);
+    HINTERNET hSession = WinHttpOpen(ua.c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) {
+        outError = "WinHttpOpen failed";
+        return false;
+    }
+    WinHttpSetTimeouts(hSession, 5000, 5000, 5000, 10000);
+
+    HINTERNET hConnect = WinHttpConnect(hSession, host, INTERNET_DEFAULT_HTTPS_PORT, 0);
+    if (!hConnect) {
+        WinHttpCloseHandle(hSession);
+        outError = "Failed to connect to Steam Web API";
+        return false;
+    }
+
+    HINTERNET hRequest = WinHttpOpenRequest(
+        hConnect, L"POST", path, nullptr,
+        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+    if (!hRequest) {
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        outError = "WinHttpOpenRequest failed";
+        return false;
+    }
+
+    const wchar_t* hdrs = L"Content-Type: application/x-www-form-urlencoded\r\n";
+    BOOL sent = WinHttpSendRequest(
+        hRequest, hdrs, static_cast<DWORD>(-1L),
+        const_cast<char*>(formBody.data()),
+        static_cast<DWORD>(formBody.size()),
+        static_cast<DWORD>(formBody.size()),
+        0);
+    if (sent) sent = WinHttpReceiveResponse(hRequest, nullptr);
+
+    if (sent) {
+        DWORD szStatus = sizeof(outStatus);
+        WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &outStatus, &szStatus, WINHTTP_NO_HEADER_INDEX);
+        DWORD avail = 0;
+        while (WinHttpQueryDataAvailable(hRequest, &avail) && avail > 0) {
+            std::string chunk(avail, '\0');
+            DWORD read = 0;
+            if (WinHttpReadData(hRequest, chunk.data(), avail, &read) && read > 0) {
+                chunk.resize(read);
+                outBody += chunk;
+            } else {
+                break;
+            }
+            if (outBody.size() > 2 * 1024 * 1024) break;
+        }
+    } else {
+        outError = "Steam Web API request failed";
+    }
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+    return sent == TRUE;
+}
+
+std::string extractSteamCollectionId(std::string_view input)
+{
+    auto trimWs = [](std::string_view sv) {
+        while (!sv.empty() && (sv.front() == ' ' || sv.front() == '\t' || sv.front() == '\r' || sv.front() == '\n'))
+            sv.remove_prefix(1);
+        while (!sv.empty() && (sv.back() == ' ' || sv.back() == '\t' || sv.back() == '\r' || sv.back() == '\n'))
+            sv.remove_suffix(1);
+        return sv;
+    };
+    input = trimWs(input);
+    if (input.empty()) return {};
+
+    // Check for ?id=123456 or &id=123456 in Steam Workshop URLs
+    const size_t idPos = input.find("id=");
+    if (idPos != std::string_view::npos) {
+        std::string digits;
+        for (size_t i = idPos + 3; i < input.size(); ++i) {
+            if (input[i] >= '0' && input[i] <= '9') digits.push_back(input[i]);
+            else break;
+        }
+        return digits;
+    }
+
+    // Otherwise require pure digits
+    std::string digits;
+    for (char c : input) {
+        if (c < '0' || c > '9') return {};
+        digits.push_back(c);
+    }
+    return digits;
+}
+
+std::string fetchSteamCollectionJson(const std::string& rawInput, int& outHttpStatus)
+{
+    outHttpStatus = 200;
+    const std::string collectionId = extractSteamCollectionId(rawInput);
+    if (collectionId.empty()) {
+        outHttpStatus = 400;
+        return "{\"ok\":false,\"error\":\"Invalid Steam Workshop collection URL or ID.\"}";
+    }
+
+    auto fetchCollectionChildren = [&](const std::string& colId,
+                                       std::vector<std::string>& outItemIds,
+                                       std::vector<std::string>& outSubCollectionIds,
+                                       std::string& err) -> bool {
+        DWORD status = 0;
+        std::string respBody;
+        const std::string form = "collectioncount=1&publishedfileids%5B0%5D=" + colId;
+        if (!winHttpPostForm(L"api.steampowered.com",
+                             L"/ISteamRemoteStorage/GetCollectionDetails/v1/",
+                             form, status, respBody, err)) {
+            return false;
+        }
+        if (status != 200) {
+            err = "Steam API HTTP " + std::to_string(status);
+            return false;
+        }
+        const auto parsed = grml::parseJson(respBody);
+        const auto* responseObj = parsed ? parsed->get("response") : nullptr;
+        const auto* detailsArr  = responseObj ? responseObj->get("collectiondetails") : nullptr;
+        if (!detailsArr || !detailsArr->isArray() ||
+            std::get<grml::JsonArray>(detailsArr->data).empty()) {
+            err = "Unexpected Steam collection response.";
+            return false;
+        }
+        const auto& entry = std::get<grml::JsonArray>(detailsArr->data)[0];
+        const int resCode = entry.get("result") ? entry.get("result")->asInt(0) : 0;
+        if (resCode != 1) {
+            err = "Steam collection not found or is private (result " + std::to_string(resCode) + ").";
+            return false;
+        }
+        const auto* children = entry.get("children");
+        if (children && children->isArray()) {
+            for (const auto& ch : std::get<grml::JsonArray>(children->data)) {
+                if (!ch.isObject()) continue;
+                const std::string childId = ch.get("publishedfileid") ? ch.get("publishedfileid")->asString() : "";
+                const int fileType        = ch.get("filetype") ? ch.get("filetype")->asInt(0) : 0;
+                if (childId.empty()) continue;
+                if (fileType == 2) {
+                    outSubCollectionIds.push_back(childId);
+                } else {
+                    outItemIds.push_back(childId);
+                }
+            }
+        }
+        return true;
+    };
+
+    std::vector<std::string> rawItemIds;
+    std::vector<std::string> subCollectionIds;
+    std::string err;
+    if (!fetchCollectionChildren(collectionId, rawItemIds, subCollectionIds, err)) {
+        outHttpStatus = 502;
+        return "{\"ok\":false,\"error\":\"" + grml::launcher_api::jsonEscape(err) + "\"}";
+    }
+
+    // Resolve 1 level of nested sub-collections if present
+    for (const auto& subId : subCollectionIds) {
+        std::vector<std::string> ignoredNested;
+        std::string subErr;
+        fetchCollectionChildren(subId, rawItemIds, ignoredNested, subErr);
+    }
+
+    // Deduplicate while preserving order
+    std::vector<std::string> workshopIds;
+    std::unordered_set<std::string> seen;
+    for (const auto& id : rawItemIds) {
+        if (seen.insert(id).second) {
+            workshopIds.push_back(id);
+        }
+    }
+
+    // Fetch collection title via GetPublishedFileDetails
+    std::string title;
+    {
+        DWORD status = 0;
+        std::string respBody;
+        std::string metaErr;
+        const std::string form = "itemcount=1&publishedfileids%5B0%5D=" + collectionId;
+        if (winHttpPostForm(L"api.steampowered.com",
+                             L"/ISteamRemoteStorage/GetPublishedFileDetails/v1/",
+                             form, status, respBody, metaErr) && status == 200) {
+            const auto parsed = grml::parseJson(respBody);
+            const auto* responseObj = parsed ? parsed->get("response") : nullptr;
+            const auto* detailsArr  = responseObj ? responseObj->get("publishedfiledetails") : nullptr;
+            if (detailsArr && detailsArr->isArray() &&
+                !std::get<grml::JsonArray>(detailsArr->data).empty()) {
+                const auto& item0 = std::get<grml::JsonArray>(detailsArr->data)[0];
+                if (const auto* t = item0.get("title")) {
+                    title = t->asString();
+                }
+            }
+        }
+    }
+    if (title.empty()) {
+        title = "Steam Collection " + collectionId;
+    }
+
+    const std::string colUrl = "https://steamcommunity.com/sharedfiles/filedetails/?id=" + collectionId;
+    std::string out = "{\"ok\":true,\"collectionId\":\"" + grml::launcher_api::jsonEscape(collectionId) +
+                      "\",\"collectionUrl\":\"" + grml::launcher_api::jsonEscape(colUrl) +
+                      "\",\"title\":\"" + grml::launcher_api::jsonEscape(title) +
+                      "\",\"workshopIds\":[";
+    for (size_t i = 0; i < workshopIds.size(); ++i) {
+        if (i > 0) out += ',';
+        out += "\"" + grml::launcher_api::jsonEscape(workshopIds[i]) + "\"";
+    }
+    out += "]}";
+    return out;
 }
 
 std::string buildSuspectsJson(const std::vector<std::string>& logTail,
@@ -706,6 +1011,10 @@ void handleClient(SOCKET client)
         const std::string resp =
             "{\"latestSave\":\"" + grml::launcher_api::jsonEscape(latestSave) + "\"}";
         sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8", resp);
+    } else if (method == "GET" && path == "/api/locales") {
+        std::lock_guard lock(g_apiMutex);
+        sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8",
+                         buildLocalesListJson(g_loaderDir, dataDir));
     } else if (method == "GET" && path == "/api/check-update") {
         sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8", checkGitHubReleaseJson());
     } else if (method == "POST" && path == "/api/update-offsets") {
@@ -848,42 +1157,123 @@ void handleClient(SOCKET client)
             openUrl.rfind("https://github.com/ZydraHydra/GloriousRepublicModLoader", 0) != 0) {
             sendHttpResponse(client, 400, "Bad Request", "application/json", "{\"ok\":false,\"error\":\"Unsupported URL\"}");
         } else {
-            ShellExecuteW(nullptr, L"open", grml::utf8ToWide(openUrl).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-            sendHttpResponse(client, 200, "OK", "application/json", "{\"ok\":true}");
+            auto isSteamRunning = []() -> bool {
+                HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+                if (snap == INVALID_HANDLE_VALUE) return false;
+                PROCESSENTRY32W pe{};
+                pe.dwSize = sizeof(pe);
+                bool found = false;
+                if (Process32FirstW(snap, &pe)) {
+                    do {
+                        if (_wcsicmp(pe.szExeFile, L"steam.exe") == 0) {
+                            found = true;
+                            break;
+                        }
+                    } while (Process32NextW(snap, &pe));
+                }
+                CloseHandle(snap);
+                return found;
+            };
+
+            std::string targetUrl = openUrl;
+            bool openedInSteam = (openUrl.rfind("steam://", 0) == 0);
+            if (openUrl.rfind("https://steamcommunity.com/", 0) == 0 &&
+                openUrl.find("filedetails/") != std::string::npos) {
+                const std::string wsId = extractSteamCollectionId(openUrl);
+                if (!wsId.empty() && isSteamRunning()) {
+                    targetUrl = "steam://url/CommunityFilePage/" + wsId;
+                    openedInSteam = true;
+                }
+            }
+            ShellExecuteW(nullptr, L"open", grml::utf8ToWide(targetUrl).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            sendHttpResponse(client, 200, "OK", "application/json",
+                             std::string("{\"ok\":true,\"openedInSteam\":") + (openedInSteam ? "true" : "false") + "}");
         }
     } else if (method == "POST" && path == "/api/playlists") {
         std::lock_guard lock(g_apiMutex);
         const auto req = grml::parseJson(body);
         const std::string action = (req && req->get("action")) ? req->get("action")->asString() : "";
         const std::string name   = (req && req->get("name")) ? req->get("name")->asString() : "";
+        const auto deleteNames   = (req && req->get("names")) ? req->get("names")->asStringArray() : std::vector<std::string>{};
+        std::unordered_set<std::string> deleteSet(deleteNames.begin(), deleteNames.end());
+
+        struct PlaylistRecord {
+            std::string name;
+            std::vector<std::string> enabledIds;
+            std::vector<std::string> workshopIds;
+            std::string source;
+            std::string collectionId;
+            std::string collectionUrl;
+        };
+
         const auto existing = grml::parseJson(readPlaylistsRawJson(dataDir));
-        std::vector<std::pair<std::string, std::vector<std::string>>> items;
+        std::vector<PlaylistRecord> items;
         if (existing && existing->isArray()) {
             for (const auto& el : std::get<grml::JsonArray>(existing->data)) {
                 if (!el.isObject()) continue;
                 const std::string n = el.get("name") ? el.get("name")->asString() : "";
-                if (n.empty() || n == name) continue;
-                const auto ids = el.get("enabledIds") ? el.get("enabledIds")->asStringArray() : std::vector<std::string>{};
-                items.emplace_back(n, ids);
+                if (n.empty() || n == name || deleteSet.count(n)) continue;
+                PlaylistRecord rec;
+                rec.name          = n;
+                rec.enabledIds    = el.get("enabledIds") ? el.get("enabledIds")->asStringArray() : std::vector<std::string>{};
+                rec.workshopIds   = el.get("workshopIds") ? el.get("workshopIds")->asStringArray() : std::vector<std::string>{};
+                rec.source        = el.get("source") ? el.get("source")->asString() : "";
+                rec.collectionId  = el.get("collectionId") ? el.get("collectionId")->asString() : "";
+                rec.collectionUrl = el.get("collectionUrl") ? el.get("collectionUrl")->asString() : "";
+                items.push_back(std::move(rec));
             }
         }
         if (action != "delete" && !name.empty()) {
-            const auto ids = (req && req->get("enabledIds")) ? req->get("enabledIds")->asStringArray() : std::vector<std::string>{};
-            items.emplace_back(name, ids);
+            PlaylistRecord rec;
+            rec.name          = name;
+            rec.enabledIds    = (req && req->get("enabledIds")) ? req->get("enabledIds")->asStringArray() : std::vector<std::string>{};
+            rec.workshopIds   = (req && req->get("workshopIds")) ? req->get("workshopIds")->asStringArray() : std::vector<std::string>{};
+            rec.source        = (req && req->get("source")) ? req->get("source")->asString() : "";
+            rec.collectionId  = (req && req->get("collectionId")) ? req->get("collectionId")->asString() : "";
+            rec.collectionUrl = (req && req->get("collectionUrl")) ? req->get("collectionUrl")->asString() : "";
+            items.push_back(std::move(rec));
         }
+
+        auto appendJsonStrArr = [](std::string& dst, const std::vector<std::string>& arr) {
+            dst += '[';
+            for (size_t j = 0; j < arr.size(); ++j) {
+                if (j > 0) dst += ',';
+                dst += "\"" + grml::launcher_api::jsonEscape(arr[j]) + "\"";
+            }
+            dst += ']';
+        };
+
         std::string out = "[\n";
         for (size_t i = 0; i < items.size(); ++i) {
             if (i > 0) out += ",\n";
-            out += "  {\"name\":\"" + grml::launcher_api::jsonEscape(items[i].first) + "\",\"enabledIds\":[";
-            for (size_t j = 0; j < items[i].second.size(); ++j) {
-                if (j > 0) out += ',';
-                out += "\"" + grml::launcher_api::jsonEscape(items[i].second[j]) + "\"";
+            const auto& r = items[i];
+            out += "  {\"name\":\"" + grml::launcher_api::jsonEscape(r.name) + "\",\"enabledIds\":";
+            appendJsonStrArr(out, r.enabledIds);
+            if (!r.workshopIds.empty()) {
+                out += ",\"workshopIds\":";
+                appendJsonStrArr(out, r.workshopIds);
             }
-            out += "]}";
+            if (!r.source.empty()) {
+                out += ",\"source\":\"" + grml::launcher_api::jsonEscape(r.source) + "\"";
+            }
+            if (!r.collectionId.empty()) {
+                out += ",\"collectionId\":\"" + grml::launcher_api::jsonEscape(r.collectionId) + "\"";
+            }
+            if (!r.collectionUrl.empty()) {
+                out += ",\"collectionUrl\":\"" + grml::launcher_api::jsonEscape(r.collectionUrl) + "\"";
+            }
+            out += "}";
         }
         out += "\n]\n";
         grml::writeFileBytesW(dataDir / L"grml_playlists.json", out);
         sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8", "{\"ok\":true,\"playlists\":" + out + "}");
+    } else if (method == "POST" && path == "/api/playlists/import-steam") {
+        const auto req = grml::parseJson(body);
+        const std::string colInput = (req && req->get("collection")) ? req->get("collection")->asString() : "";
+        int status = 200;
+        const std::string resJson = fetchSteamCollectionJson(colInput, status);
+        sendHttpResponse(client, status, status == 200 ? "OK" : "Error",
+                         "application/json; charset=utf-8", resJson);
     } else if (method == "POST" && path == "/api/launch") {
         std::lock_guard lock(g_apiMutex);
         const auto req = grml::parseJson(body);
@@ -902,7 +1292,10 @@ void handleClient(SOCKET client)
         const std::filesystem::path gameExe = (req && req->get("gameExe"))
             ? std::filesystem::path(grml::utf8ToWide(req->get("gameExe")->asString()))
             : std::filesystem::path{};
-        const auto res = grml::launcher_api::launchGame(g_loaderDir, gameExe);
+        const auto tempDisabledIds = (req && req->get("tempDisabledIds"))
+            ? req->get("tempDisabledIds")->asStringArray()
+            : std::vector<std::string>{};
+        const auto res = grml::launcher_api::launchGame(g_loaderDir, gameExe, tempDisabledIds);
         if (res.ok && res.processId != 0) {
             g_lastLaunchPid = res.processId;
             g_lastLaunchMs  = nowMs();
@@ -911,6 +1304,22 @@ void handleClient(SOCKET client)
                          "application/json; charset=utf-8", res.json);
     } else if (method == "GET") {
         const std::string lookup = (path == "/") ? "/index.html" : path;
+        // Allow external locale JSON files in %LOCALAPPDATA%\GRML\locales\ or <loaderDir>\locales\
+        // to override or extend embedded translations without rebuilding.
+        if (lookup.starts_with("/locales/") && lookup.ends_with(".json")) {
+            const std::string rel = lookup.substr(9);
+            if (!rel.empty() && rel.find('/') == std::string::npos &&
+                rel.find('\\') == std::string::npos && rel.find("..") == std::string::npos) {
+                const std::wstring wrel = grml::utf8ToWide(rel);
+                std::string extBytes;
+                if (grml::readFileBytesW(dataDir / L"locales" / wrel, extBytes) ||
+                    grml::readFileBytesW(g_loaderDir / L"locales" / wrel, extBytes)) {
+                    sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8", extBytes);
+                    closesocket(client);
+                    return;
+                }
+            }
+        }
         const auto assets = grml::generated::embeddedUiAssets();
         const grml::generated::EmbeddedUiAsset* matched  = nullptr;
         const grml::generated::EmbeddedUiAsset* fallback = nullptr;

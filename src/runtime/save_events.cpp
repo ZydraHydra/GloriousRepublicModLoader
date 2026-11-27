@@ -137,6 +137,8 @@ void writeSessionJsonFile(const std::filesystem::path& outPath,
             json += "\"status\":\"" + std::string(grml::offsets::offsetStatusToString(e.status)) + "\",";
             json += "\"match_count\":" + std::to_string(e.matchCount) + ",";
             json += "\"resolve\":\"" + std::string(grml::offsets::resolveModeToString(e.def.resolveMode)) + "\",";
+            json += "\"category\":\"" + jsonEscapeLocal(e.def.category) + "\",";
+            json += "\"required\":" + std::string(e.def.required ? "true" : "false") + ",";
             json += "\"verified_build\":\"" + jsonEscapeLocal(e.def.verifiedBuild) + "\",";
             json += "\"anchor_xref\":\"" + jsonEscapeLocal(e.def.anchorXref) + "\",";
             json += "\"rva\":\"" + rvaStr + "\",";
@@ -144,6 +146,20 @@ void writeSessionJsonFile(const std::filesystem::path& outPath,
             json += std::string("}") + ((i + 1 < diag.offsets.size()) ? ",\n" : "\n");
         }
         json += "  ]";
+        if (!diag.aobMissingErrors.empty()) {
+            json += ",\n  \"errors\": [\n";
+            for (size_t i = 0; i < diag.aobMissingErrors.size(); ++i) {
+                const auto& err = diag.aobMissingErrors[i];
+                json += "    {\"code\":\"AOB_MISSING\",\"plugin_id\":\"" + jsonEscapeLocal(err.pluginId) +
+                        "\",\"plugin_name\":\"" + jsonEscapeLocal(err.pluginName) + "\",\"missing_offsets\":[";
+                for (size_t j = 0; j < err.missingOffsets.size(); ++j) {
+                    if (j > 0) json += ",";
+                    json += "\"" + jsonEscapeLocal(err.missingOffsets[j]) + "\"";
+                }
+                json += std::string("]}") + ((i + 1 < diag.aobMissingErrors.size()) ? ",\n" : "\n");
+            }
+            json += "  ]";
+        }
     }
     json += "\n}\n";
 

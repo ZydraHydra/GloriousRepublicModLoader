@@ -289,12 +289,17 @@ std::string buildDiscoverJsonStr(const std::filesystem::path& loaderDir, const s
         if (n > 0) out.append(buf, static_cast<size_t>(std::min<int>(n, sizeof(buf) - 1)));
     };
 
+    const std::string detectedGameLang = gameExe.empty()
+        ? std::string{}
+        : grml::detectWrsrGameLanguage(gameExe.parent_path());
+
     out += "{\n";
     out += "  \"loaderVersion\": \"" + jsonEsc(GRML_BUILD_VERSION) + "\",\n";
     out += "  \"loaderDir\": \"" + jsonEsc(grml::wideToUtf8(loaderDir.wstring())) + "\",\n";
     out += "  \"dataDir\": \"" + jsonEsc(grml::wideToUtf8(dataDir.wstring())) + "\",\n";
     out += "  \"gameExe\": \"" + jsonEsc(grml::wideToUtf8(gameExe.wstring())) + "\",\n";
     out += "  \"gameVersion\": \"" + jsonEsc(gameVer) + "\",\n";
+    out += "  \"gameLanguage\": \"" + jsonEsc(detectedGameLang) + "\",\n";
     out += "  \"peFileVersion\": \"" + jsonEsc(peFileVer) + "\",\n";
     out += "  \"gameSha256\": \"" + jsonEsc(gameSha) + "\",\n";
     addFmt("  \"peTimestamp\": \"0x%08X\",\n", peInfo.timeDateStamp);
@@ -314,6 +319,7 @@ std::string buildDiscoverJsonStr(const std::filesystem::path& loaderDir, const s
         out += "\"status\":\"" + std::string(grml::offsets::offsetStatusToString(e.status)) + "\",";
         out += "\"matchCount\":" + std::to_string(e.matchCount) + ",";
         out += "\"resolve\":\"" + std::string(grml::offsets::resolveModeToString(e.def.resolveMode)) + "\",";
+        out += "\"category\":\"" + jsonEsc(e.def.category) + "\",";
         out += "\"verifiedBuild\":\"" + jsonEsc(e.def.verifiedBuild) + "\",";
         out += "\"anchorXref\":\"" + jsonEsc(e.def.anchorXref) + "\",";
         out += "\"required\":" + std::string(e.def.required ? "true" : "false") + ",";
@@ -327,10 +333,16 @@ std::string buildDiscoverJsonStr(const std::filesystem::path& loaderDir, const s
     out += "  \"vfs\": " + vfs.serializeJson() + ",\n";
     out += "  \"mods\": [\n";
 
+    std::string activeLang = cfg.getString("general", "language", "auto");
+    if (activeLang.empty() || _stricmp(activeLang.c_str(), "auto") == 0) {
+        activeLang = detectedGameLang.empty() ? "en" : detectedGameLang;
+    }
+
     uint32_t orderNum = 1;
     for (size_t i = 0; i < combined.size(); ++i) {
         const auto& p       = combined[i];
-        const auto  schema  = grml::discoverModUiSchema(p.dllPath, p.manifestPath, p.name);
+        auto        schema  = grml::discoverModUiSchema(p.dllPath, p.manifestPath, p.name);
+        grml::applyModUiTranslations(schema, p.dllPath, activeLang);
         const auto  iniPath = grml::findModIniPath(p.dllPath, p.manifestPath, &schema);
         const uint32_t ord  = (p.enabled && !p.blockedByDependencyOrConflict) ? orderNum++ : 0;
 
@@ -354,8 +366,42 @@ std::string buildDiscoverJsonStr(const std::filesystem::path& loaderDir, const s
         out += "      \"dependencies\": " + jsonStrArray(p.dependencies) + ",\n";
         out += "      \"conflictsWith\": " + jsonStrArray(p.conflictsWith) + ",\n";
         out += "      \"loadAfter\": " + jsonStrArray(p.loadAfter) + ",\n";
+        std::vector<std::string> missingReq;
+        std::vector<std::string> missingOpt;
+        auto isOffsetOk = [&](const std::string& offName) -> bool {
+            std::string want = offName;
+            for (char& c : want) {
+                if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + ('a' - 'A'));
+            }
+            for (const auto& re : resolvedOffsets) {
+                if (re.def.name == want) {
+                    return re.status == grml::offsets::OffsetStatus::Ok ||
+                           re.status == grml::offsets::OffsetStatus::Cached;
+                }
+            }
+            return false;
+        };
+        for (const auto& ro : p.requiredOffsets) {
+            if (!isOffsetOk(ro)) missingReq.push_back(ro);
+        }
+        for (const auto& oo : p.optionalOffsets) {
+            if (!isOffsetOk(oo)) missingOpt.push_back(oo);
+        }
+        std::string offsetCompat = "legacy";
+        if (p.hasGrmlManifest || !p.requiredOffsets.empty() || !p.optionalOffsets.empty()) {
+            if (!missingReq.empty()) offsetCompat = "needs_update";
+            else if (!missingOpt.empty()) offsetCompat = "degraded";
+            else offsetCompat = "ready";
+        }
+
         out += "      \"supportedGameVersions\": " + jsonStrArray(p.supportedGameVersions) + ",\n";
         out += "      \"gameVersionMismatch\": " + std::string(grml::isGameVersionSupported(p, gameVer) ? "false" : "true") + ",\n";
+        out += "      \"hasGrmlManifest\": " + std::string(p.hasGrmlManifest ? "true" : "false") + ",\n";
+        out += "      \"requiredOffsets\": " + jsonStrArray(p.requiredOffsets) + ",\n";
+        out += "      \"optionalOffsets\": " + jsonStrArray(p.optionalOffsets) + ",\n";
+        out += "      \"missingRequiredOffsets\": " + jsonStrArray(missingReq) + ",\n";
+        out += "      \"missingOptionalOffsets\": " + jsonStrArray(missingOpt) + ",\n";
+        out += "      \"offsetCompatibility\": \"" + offsetCompat + "\",\n";
         out += "      \"uiSchema\": " + grml::serializeUiSchemaJson(schema) + "\n";
         out += std::string("    }") + ((i + 1 < combined.size()) ? ",\n" : "\n");
     }
@@ -1206,7 +1252,9 @@ std::string buildStatusJson()
 
 std::string buildCrashEventsJson() { return ::buildCrashEventsJsonStr(); }
 
-LaunchResult launchGame(const std::filesystem::path& loaderDir, const std::filesystem::path& gameOverride)
+LaunchResult launchGame(const std::filesystem::path& loaderDir,
+                        const std::filesystem::path& gameOverride,
+                        const std::vector<std::string>& tempDisabledIds)
 {
     const std::filesystem::path dataDir = grml::getAppDataDir(loaderDir);
     grml::IniFile cfg;
@@ -1215,7 +1263,7 @@ LaunchResult launchGame(const std::filesystem::path& loaderDir, const std::files
         !gameOverride.empty() ? gameOverride : std::filesystem::path(grml::utf8ToWide(cfg.getString("general", "game_path", "")));
     const std::filesystem::path gameExe = grml::discoverWrsrGameExe(loaderDir, cfgGame);
 
-    const auto res = grml::launcher::launchAndInjectWrsr(loaderDir, gameExe);
+    const auto res = grml::launcher::launchAndInjectWrsr(loaderDir, gameExe, tempDisabledIds);
     LaunchResult lr;
     lr.ok        = res.ok;
     lr.processId = res.processId;

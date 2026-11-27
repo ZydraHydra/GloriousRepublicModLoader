@@ -10,7 +10,7 @@ export function compareVersionsDesc(a: string, b: string): number {
 }
 
 export function abiBadgeVariant(abi: string): 'grml' | 'rml' | 'tesmio' | 'default' {
-	if (abi === 'GRML') return 'grml';
+	if (abi === 'GRML' || abi.startsWith('GRML ')) return 'grml';
 	if (abi === 'RML v1') return 'rml';
 	if (abi === 'Tesmio v4') return 'tesmio';
 	return 'default';
