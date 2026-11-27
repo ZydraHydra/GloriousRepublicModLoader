@@ -74,7 +74,10 @@
 
 	$effect(() => {
 		const curMod = mod;
-		if (!curMod) return;
+		if (!curMod) {
+			lastLoadedKey = '';
+			return;
+		}
 		const key = `${curMod.id}|${curMod.iniPath}`;
 		if (key === lastLoadedKey) return;
 		lastLoadedKey = key;
@@ -334,10 +337,18 @@
 								{:else if ctrl.type === 'select'}
 									<Select
 										options={(ctrl.options || []).map((o) => ({ value: o, label: o }))}
-										bind:value={fieldValues[k]}
+										value={fieldValues[k] ?? ''}
+										onchange={(v) => {
+											fieldValues[k] = v;
+										}}
 									/>
 								{:else}
-									<TextInput bind:value={fieldValues[k]} />
+									<TextInput
+										value={fieldValues[k] ?? ''}
+										oninput={(v) => {
+											fieldValues[k] = v;
+										}}
+									/>
 								{/if}
 							</div>
 						{/if}
@@ -355,9 +366,11 @@
 			</div>
 		</div>
 	{:else}
-		<textarea class="raw-ini-area" bind:value={rawText}></textarea>
-		<div style="margin-top:10px;">
-			<Button variant="primary" onclick={saveRawIni}>{t('inspector.saveRawIni')}</Button>
+		<div>
+			<textarea class="raw-ini-area" bind:value={rawText}></textarea>
+			<div style="margin-top:10px;">
+				<Button variant="primary" onclick={saveRawIni}>{t('inspector.saveRawIni')}</Button>
+			</div>
 		</div>
 	{/if}
 {/if}

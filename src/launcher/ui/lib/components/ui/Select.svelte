@@ -25,7 +25,7 @@
 	bind:value
 	onchange={() => onchange?.(value)}
 >
-	{#each options as opt (opt.value)}
+	{#each options as opt, idx (`${idx}::${opt.value}`)}
 		<option value={opt.value}>{opt.label}</option>
 	{/each}
 </select>

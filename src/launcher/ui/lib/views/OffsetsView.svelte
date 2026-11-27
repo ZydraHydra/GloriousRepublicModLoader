@@ -184,7 +184,7 @@
 											{#if entry.status === 'OK' || entry.status === 'CACHED'}
 												<code>{entry.rva || '—'}</code>
 												{#if entry.resolved}
-													<span class="muted"> → </span><code>{entry.resolved}</code>
+													<br><span class="muted"> → </span><code>{entry.resolved}</code>
 												{/if}
 											{:else}
 												<span class="muted">{t('diagnostics.matchesCount', { count: entry.matchCount })}</span>

@@ -322,6 +322,18 @@ class AppStore {
 		}
 	}
 
+	async reloadForGameExe(newPath?: string) {
+		if (typeof newPath === 'string') {
+			this.gameExeInput = newPath;
+		}
+		this.selectedModId = null;
+		this.selectedSaveName = null;
+		this.savesData = null;
+		await this.saveGrmlIni();
+		await this.fetchState();
+		await this.fetchSaves();
+	}
+
 	async saveGrmlIni() {
 		if (!this.discovery) return;
 		const plugins: Record<string, boolean> = {};

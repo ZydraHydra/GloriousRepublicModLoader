@@ -98,16 +98,13 @@
 		const resp = await fetch(`/api/browse-game?current=${encodeURIComponent(app.gameExeInput.trim())}`);
 		const data = await resp.json();
 		if (data.ok && data.path) {
-			app.gameExeInput = data.path;
-			await app.saveGrmlIni();
-			await app.fetchState();
+			await app.reloadForGameExe(data.path);
 			app.setStatus(t('settings.gameExeSetStatus', { path: data.path }));
 		}
 	}
 
 	async function onPathChange() {
-		await app.saveGrmlIni();
-		await app.fetchState();
+		await app.reloadForGameExe();
 	}
 
 	async function onDiscoveryToggle() {

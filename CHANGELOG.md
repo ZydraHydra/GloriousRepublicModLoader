@@ -11,6 +11,10 @@
 - **`docs/OFFSET_CATALOG.md`:** New full catalog doc listing all 31 declared offsets across the 6 categories with descriptions, ABI fields, and version coverage.
 - **21 locale files updated** with `nav.offsets` translation key for the new nav tab.
 
+### Launcher Fixes
+- **Full reload on game executable change:** Changing `SOVIET64.exe` in Settings now reloads mods, VFS overrides, offsets, playlists, and Save Inspector entries together (`reloadForGameExe()`).
+- **Mod Inspector tab switching:** Fixed switching back from **Raw INI** to **Settings** in `ModInspector.svelte` by replacing `$bindable` mutations on uninitialized `fieldValues` keys with explicit value/event bindings, wrapping the Raw INI view in a single root container, and keying `Select` options by index + value.
+
 ## Glorious Republic Mod Loader (GRML) v2.0.0
 
 ### Highlights & Architecture
