@@ -255,6 +255,10 @@ class AppStore {
 	devWorkshopPath = $state('');
 	devWorkshopWipPath = $state('');
 	devOverridesPath = $state('');
+	chkMcpEnabled = $state(false);
+	mcpPort = $state(38420);
+	mcpLiveUrl = $state('');
+	mcpLiveEnabled = $state(false);
 
 	// Saves state
 	savesData = $state<SavesResponse | null>(null);
@@ -341,8 +345,24 @@ class AppStore {
 		this.devWorkshopPath = gen.dev_workshop_path || sd?.workshopRoot || '';
 		this.devWorkshopWipPath = gen.dev_workshop_wip_path || sd?.workshopWipRoot || '';
 		this.devOverridesPath = gen.dev_overrides_path || sd?.overridesRoot || '';
+		this.chkMcpEnabled = gen.mcp_enabled === '1';
+		const parsedMcpPort = Number.parseInt(gen.mcp_port ?? '38420', 10);
+		this.mcpPort = Number.isFinite(parsedMcpPort) && parsedMcpPort > 0 && parsedMcpPort <= 65535 ? parsedMcpPort : 38420;
+		await this.fetchMcpInfo();
 
 		this.setStatus(t('status.loadedMods', { count: data.discovery?.mods?.length ?? 0 }));
+	}
+
+	async fetchMcpInfo() {
+		try {
+			const resp = await fetch('/api/mcp-info');
+			if (!resp.ok) return;
+			const info = await resp.json();
+			this.mcpLiveEnabled = !!info.enabled;
+			this.mcpLiveUrl = info.mcpUrl ?? '';
+		} catch {
+			// Ignore transient error
+		}
 	}
 
 	async refreshLatestSave() {
@@ -403,7 +423,9 @@ class AppStore {
 			dev_workshop_wip_enabled: this.chkDevWip ? '1' : '0',
 			dev_workshop_wip_path: this.devWorkshopWipPath.trim(),
 			dev_overrides_enabled: this.chkDevOverrides ? '1' : '0',
-			dev_overrides_path: this.devOverridesPath.trim()
+			dev_overrides_path: this.devOverridesPath.trim(),
+			mcp_enabled: this.chkMcpEnabled ? '1' : '0',
+			mcp_port: String(Math.max(1024, Math.min(65535, Math.round(Number(this.mcpPort) || 38420))))
 		};
 		const resp = await fetch('/api/config', {
 			method: 'POST',
@@ -411,6 +433,7 @@ class AppStore {
 			body: JSON.stringify({ general, plugins })
 		});
 		if ((await resp.json()).ok) {
+			await this.fetchMcpInfo();
 			this.setStatus(t('status.savedGrmlIni'));
 		}
 	}

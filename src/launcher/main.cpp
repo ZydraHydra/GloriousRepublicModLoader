@@ -1275,6 +1275,177 @@ std::string buildCrashEventsJson() { return ::buildCrashEventsJsonStr(); }
 
 namespace {
 
+std::string toLowerAsciiLocal(std::string_view sv)
+{
+    std::string out(sv);
+    for (char& c : out) {
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + ('a' - 'A'));
+    }
+    return out;
+}
+
+} // namespace
+
+std::vector<std::string> readFilteredLogTail(const std::filesystem::path& dataDir,
+                                             size_t maxLines,
+                                             std::string_view severityFilter,
+                                             std::string_view searchFilter)
+{
+    std::string raw;
+    if (!grml::readFileBytesW(dataDir / L"grml.log", raw)) return {};
+    const std::string sevLo    = toLowerAsciiLocal(severityFilter);
+    const std::string searchLo = toLowerAsciiLocal(searchFilter);
+
+    std::vector<std::string> lines;
+    size_t pos = 0;
+    while (pos < raw.size()) {
+        size_t eol = raw.find('\n', pos);
+        if (eol == std::string::npos) eol = raw.size();
+        std::string_view line(raw.data() + pos, eol - pos);
+        if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+        pos = eol + 1;
+        if (line.empty()) continue;
+
+        if (!sevLo.empty()) {
+            const std::string lineLo = toLowerAsciiLocal(line);
+            if (lineLo.find("[" + sevLo + "]") == std::string::npos) continue;
+        }
+        if (!searchLo.empty()) {
+            const std::string lineLo = toLowerAsciiLocal(line);
+            if (lineLo.find(searchLo) == std::string::npos) continue;
+        }
+        lines.emplace_back(line);
+    }
+    if (maxLines > 0 && lines.size() > maxLines) {
+        lines.erase(lines.begin(), lines.begin() + static_cast<ptrdiff_t>(lines.size() - maxLines));
+    }
+    return lines;
+}
+
+StopResult stopGame(uint32_t targetPid, uint32_t waitMs)
+{
+    StopResult sr{};
+    std::vector<uint32_t> pids = getRunningSovietPids();
+    if (targetPid != 0) {
+        pids.erase(std::remove_if(pids.begin(), pids.end(),
+                                  [targetPid](uint32_t p) { return p != targetPid; }),
+                   pids.end());
+    }
+    if (pids.empty()) {
+        sr.ok      = true;
+        sr.message = "No running SOVIET64.exe process found.";
+        return sr;
+    }
+
+    for (uint32_t pid : pids) {
+        HANDLE hProc = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pid);
+        if (!hProc) {
+            sr.message = "Failed to open SOVIET64.exe PID " + std::to_string(pid) +
+                         " (Win32 error " + std::to_string(GetLastError()) + ").";
+            return sr;
+        }
+        const BOOL termOk = TerminateProcess(hProc, 1);
+        if (termOk) {
+            WaitForSingleObject(hProc, waitMs);
+            sr.stoppedPids.push_back(pid);
+        }
+        CloseHandle(hProc);
+        if (!termOk) {
+            sr.message = "TerminateProcess failed for PID " + std::to_string(pid) + ".";
+            return sr;
+        }
+    }
+    sr.ok      = true;
+    sr.message = "Stopped " + std::to_string(sr.stoppedPids.size()) + " SOVIET64.exe process(es).";
+    return sr;
+}
+
+WaitResult waitForGameState(const std::filesystem::path& loaderDir,
+                            const std::string& targetState,
+                            const std::string& expectedSave,
+                            uint32_t timeoutMs)
+{
+    WaitResult wr{};
+    const std::filesystem::path dataDir     = grml::getAppDataDir(loaderDir);
+    const std::filesystem::path sessionPath = dataDir / L"grml_session.json";
+    const uint32_t clampedTimeout           = (std::min)(timeoutMs, 300000U);
+    const ULONGLONG startTick               = GetTickCount64();
+
+    bool everSawRunning = !getRunningSovietPids().empty();
+
+    for (;;) {
+        const auto pids = getRunningSovietPids();
+        const bool running = !pids.empty();
+        if (running) {
+            everSawRunning = true;
+            wr.pid         = pids.front();
+        }
+
+        const auto crashLines = readFilteredLogTail(dataDir, 20, "FATAL", "[CrashGuard]");
+        if (!crashLines.empty()) {
+            wr.ok      = false;
+            wr.crashed = true;
+            wr.state   = "crashed";
+            wr.details = crashLines.back();
+            return wr;
+        }
+
+        std::string sessRaw;
+        std::string lastLoaded;
+        std::string autoLoad;
+        if (grml::readFileBytesW(sessionPath, sessRaw)) {
+            if (const auto parsed = grml::parseJson(sessRaw); parsed && parsed->isObject()) {
+                if (const auto* ll = parsed->get("last_loaded_save")) lastLoaded = ll->asString();
+                if (const auto* al = parsed->get("auto_load_save")) autoLoad = al->asString();
+            }
+        }
+        wr.lastSave = lastLoaded;
+
+        if (targetState == "process_running") {
+            if (running) {
+                wr.ok      = true;
+                wr.state   = "running";
+                wr.details = "SOVIET64.exe is running.";
+                return wr;
+            }
+        } else if (targetState == "process_exited") {
+            if (!running) {
+                wr.ok      = true;
+                wr.state   = "exited";
+                wr.details = "No SOVIET64.exe process is running.";
+                return wr;
+            }
+        } else {
+            // Default: "save_loaded"
+            const bool saveMatch = expectedSave.empty() ? !lastLoaded.empty() : (lastLoaded == expectedSave);
+            if (running && saveMatch && autoLoad.empty()) {
+                wr.ok      = true;
+                wr.state   = "save_loaded";
+                wr.details = "Save '" + lastLoaded + "' loaded.";
+                return wr;
+            }
+            if (everSawRunning && !running) {
+                wr.ok      = false;
+                wr.crashed = true;
+                wr.state   = "exited_early";
+                wr.details = "SOVIET64.exe exited before save_loaded was reached.";
+                return wr;
+            }
+        }
+
+        if ((GetTickCount64() - startTick) >= clampedTimeout) {
+            wr.ok       = false;
+            wr.timedOut = true;
+            wr.state    = "timeout";
+            wr.details  = "Timed out waiting for state '" + targetState + "'.";
+            return wr;
+        }
+        Sleep(250);
+    }
+}
+
+namespace {
+
 struct BackupProgressState {
     bool        active{false};
     std::string phase{"idle"};
@@ -1752,6 +1923,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
     Mode mode = Mode::Launch;
     std::filesystem::path gameOverride;
     std::filesystem::path iniOverride;
+    uint16_t servePort = 0;
+    bool forcePort = false;
+    int mcpOverride = -1;
 
     for (int i = 1; i < argc; ++i) {
         if (std::wcscmp(argv[i], L"--discover") == 0) mode = Mode::Discover;
@@ -1765,6 +1939,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
         else if (std::wcscmp(argv[i], L"--generate-schema") == 0) mode = Mode::GenSchema;
         else if (std::wcscmp(argv[i], L"--serve-only") == 0) mode = Mode::ServeOnly;
         else if (std::wcscmp(argv[i], L"--launch") == 0) mode = Mode::Launch;
+        else if (std::wcscmp(argv[i], L"--mcp") == 0) mcpOverride = 1;
+        else if (std::wcscmp(argv[i], L"--port") == 0 && i + 1 < argc) {
+            const long p = std::wcstol(argv[++i], nullptr, 10);
+            if (p > 0 && p <= 65535) {
+                servePort = static_cast<uint16_t>(p);
+                forcePort = true;
+            }
+        }
         else if (std::wcscmp(argv[i], L"--game") == 0 && i + 1 < argc) gameOverride = argv[++i];
         else if (std::wcscmp(argv[i], L"--ini") == 0 && i + 1 < argc) iniOverride = argv[++i];
     }
@@ -1802,11 +1984,18 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
         break;
     case Mode::ServeOnly: {
         uint16_t port = 0;
-        if (!grml::http_server::start(loaderDir, port)) {
+        grml::http_server::StartOptions opts;
+        opts.preferredPort = servePort;
+        opts.forcePort     = forcePort;
+        opts.mcpOverride   = mcpOverride;
+        if (!grml::http_server::start(loaderDir, port, opts)) {
             std::fprintf(stderr, "Failed to start GRML HTTP server.\n");
             return 1;
         }
         std::printf("GRML_SERVE_URL=http://127.0.0.1:%u/\n", static_cast<unsigned>(port));
+        if (grml::http_server::isMcpEnabled()) {
+            std::printf("GRML_MCP_URL=http://127.0.0.1:%u/mcp\n", static_cast<unsigned>(port));
+        }
         std::fflush(stdout);
         // Wait until stdin closes
         char buf[64];

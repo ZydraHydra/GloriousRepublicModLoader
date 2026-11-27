@@ -4,7 +4,7 @@ GRML splits responsibilities cleanly between a thin desktop UI, a native Win32 C
 
 ```text
 GloriousRepublicModLoader.exe (Native Win32 + WebView2, src/launcher/)
-   │  • Embedded SvelteKit SPA (src/launcher/ui/) + in-process HTTP/API
+   │  • Embedded SvelteKit SPA (src/launcher/ui/) + in-process HTTP/API + opt-in MCP server (/mcp)
    │  • Discovery: plugins, manifests, topo-sort, UI schemas, Media VFS, Save Inspector
    │  • Config I/O: comment-preserving grml.ini, grml_vfs.ini, configs/<id>.ini (%LOCALAPPDATA%\GRML)
    │  • Diagnostics & Updates: SOVIET64.exe status, WER EventID 1000, GitHub Release & Offset OTA check

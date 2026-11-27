@@ -413,6 +413,52 @@
 			</div>
 		</PanelCard>
 
+		<PanelCard>
+			<div class="control-top">
+				<div class="control-label">
+					{t('settings.mcpLabel')}
+					{#if app.mcpLiveEnabled && app.mcpLiveUrl}
+						<Badge variant="ready">{t('settings.mcpActiveBadge')}</Badge>
+					{:else}
+						<Badge variant="default">{t('settings.mcpDisabledBadge')}</Badge>
+					{/if}
+				</div>
+				<ToggleSwitch bind:checked={app.chkMcpEnabled} onchange={() => app.saveGrmlIni()} />
+			</div>
+			<div class="control-tip">
+				{@html t('settings.mcpTip')}
+			</div>
+			{#if app.chkMcpEnabled}
+				<div class="control-input-row" style="margin-top:8px;">
+					<input
+						type="number"
+						class="ui-input mono"
+						style="width:110px;flex:0 0 110px;"
+						min="1024"
+						max="65535"
+						bind:value={app.mcpPort}
+						onchange={() => app.saveGrmlIni()}
+					/>
+					<TextInput
+						value={app.mcpLiveUrl || `http://127.0.0.1:${app.mcpPort}/mcp`}
+						mono={true}
+						readonly={true}
+					/>
+					<Button
+						size="sm"
+						onclick={async () => {
+							const url = app.mcpLiveUrl || `http://127.0.0.1:${app.mcpPort}/mcp`;
+							const snippet = JSON.stringify({ mcpServers: { grml: { url } } }, null, 2);
+							await navigator.clipboard.writeText(snippet);
+							app.setStatus(t('settings.mcpCopiedStatus'));
+						}}
+					>
+						{t('settings.mcpCopyConfigBtn')}
+					</Button>
+				</div>
+			{/if}
+		</PanelCard>
+
 		{#if app.discovery?.showDevSettings}
 		<PanelCard>
 			<div class="control-top">

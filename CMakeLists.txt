@@ -170,6 +170,7 @@ add_executable(grml_injector WIN32
     src/launcher/main.cpp
     src/launcher/injector.cpp
     src/launcher/http_server.cpp
+    src/launcher/mcp_server.cpp
     src/launcher/webview_host.cpp
     src/launcher/launcher.rc
 )

@@ -1,6 +1,7 @@
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
 #include "launcher/http_server.hpp"
 #include "launcher/launcher_api.hpp"
+#include "launcher/mcp_server.hpp"
 #include "common/ini_util.hpp"
 #include "common/json_min.hpp"
 #include "common/offset_resolver.hpp"
@@ -39,6 +40,8 @@ namespace {
 SOCKET                g_listenSock = INVALID_SOCKET;
 std::thread           g_acceptThread;
 std::atomic<bool>     g_running{false};
+std::atomic<bool>     g_mcpEnabled{false};
+std::atomic<uint16_t> g_activePort{0};
 std::filesystem::path g_loaderDir;
 std::mutex            g_apiMutex;
 
@@ -893,20 +896,26 @@ void updateCachedModsFromDiscoverJson(const std::string& discoverJson)
 }
 
 void sendHttpResponse(SOCKET sock, int statusCode, const char* statusText,
-                      std::string_view contentType, std::string_view body)
+                      std::string_view contentType, std::string_view body,
+                      std::string_view extraHeaders = {})
 {
-    char hdr[512]{};
-    const int hdrLen = std::snprintf(
-        hdr, sizeof(hdr),
+    std::string hdr;
+    hdr.reserve(512 + extraHeaders.size());
+    char top[256]{};
+    const int topLen = std::snprintf(
+        top, sizeof(top),
         "HTTP/1.1 %d %s\r\n"
         "Content-Type: %.*s\r\n"
         "Content-Length: %zu\r\n"
-        "Cache-Control: no-store\r\n"
-        "Connection: close\r\n\r\n",
+        "Cache-Control: no-store\r\n",
         statusCode, statusText,
         static_cast<int>(contentType.size()), contentType.data(),
         body.size());
-    send(sock, hdr, hdrLen, 0);
+    hdr.append(top, static_cast<size_t>(topLen));
+    if (!extraHeaders.empty()) hdr.append(extraHeaders);
+    hdr.append("Connection: close\r\n\r\n");
+
+    send(sock, hdr.data(), static_cast<int>(hdr.size()), 0);
     size_t sent = 0;
     while (sent < body.size()) {
         const int chunk = static_cast<int>(std::min<size_t>(body.size() - sent, 65536));
@@ -914,6 +923,55 @@ void sendHttpResponse(SOCKET sock, int statusCode, const char* statusText,
         if (n <= 0) break;
         sent += static_cast<size_t>(n);
     }
+}
+
+std::string getHttpHeader(std::string_view hdrView, std::string_view lowerName)
+{
+    const std::string hdrLo = toLowerAscii(std::string(hdrView));
+    const std::string needle = std::string("\r\n") + std::string(lowerName) + ":";
+    size_t pos = hdrLo.find(needle);
+    if (pos == std::string::npos) return {};
+    pos += needle.size();
+    while (pos < hdrView.size() && (hdrView[pos] == ' ' || hdrView[pos] == '\t')) ++pos;
+    const size_t eol = hdrView.find("\r\n", pos);
+    const size_t end = (eol == std::string_view::npos) ? hdrView.size() : eol;
+    std::string val(hdrView.substr(pos, end - pos));
+    while (!val.empty() && (val.back() == ' ' || val.back() == '\t')) val.pop_back();
+    return val;
+}
+
+bool isLocalOriginAllowed(std::string_view origin)
+{
+    if (origin.empty()) return true;
+    const std::string lo = toLowerAscii(std::string(origin));
+    auto checkPrefix = [&](std::string_view p) {
+        if (lo.rfind(p, 0) != 0) return false;
+        if (lo.size() == p.size()) return true;
+        const char next = lo[p.size()];
+        return next == ':' || next == '/';
+    };
+    return checkPrefix("http://127.0.0.1") ||
+           checkPrefix("http://localhost") ||
+           checkPrefix("http://[::1]") ||
+           checkPrefix("https://127.0.0.1") ||
+           checkPrefix("https://localhost");
+}
+
+void writeMcpDiscoveryFile(const std::filesystem::path& dataDir, uint16_t port, bool enabled)
+{
+    const std::filesystem::path mcpJsonPath = dataDir / L"grml_mcp.json";
+    if (!enabled || port == 0) {
+        DeleteFileW(mcpJsonPath.c_str());
+        return;
+    }
+    const std::string json =
+        "{\n"
+        "  \"enabled\": true,\n"
+        "  \"port\": " + std::to_string(port) + ",\n"
+        "  \"mcpUrl\": \"http://127.0.0.1:" + std::to_string(port) + "/mcp\",\n"
+        "  \"pid\": " + std::to_string(GetCurrentProcessId()) + "\n"
+        "}\n";
+    grml::writeFileBytesW(mcpJsonPath, json);
 }
 
 void handleClient(SOCKET client)
@@ -1089,6 +1147,13 @@ void handleClient(SOCKET client)
         std::lock_guard lock(g_apiMutex);
         std::string outJson;
         const bool ok = grml::launcher_api::saveConfigFromJson(g_loaderDir, body, outJson);
+        if (ok) {
+            grml::IniFile cfg;
+            cfg.loadFromFile(dataDir / L"grml.ini");
+            const bool nowEnabled = cfg.getBool("general", "mcp_enabled", false);
+            g_mcpEnabled.store(nowEnabled, std::memory_order_relaxed);
+            writeMcpDiscoveryFile(dataDir, g_activePort.load(std::memory_order_relaxed), nowEnabled);
+        }
         sendHttpResponse(client, ok ? 200 : 500, ok ? "OK" : "Error", "application/json; charset=utf-8", outJson);
     } else if (method == "POST" && path == "/api/vfs") {
         std::lock_guard lock(g_apiMutex);
@@ -1326,6 +1391,58 @@ void handleClient(SOCKET client)
         const std::string resJson = fetchSteamCollectionJson(colInput, status);
         sendHttpResponse(client, status, status == 200 ? "OK" : "Error",
                          "application/json; charset=utf-8", resJson);
+    } else if (method == "GET" && path == "/api/mcp-info") {
+        const bool en = g_mcpEnabled.load(std::memory_order_relaxed);
+        const uint16_t port = g_activePort.load(std::memory_order_relaxed);
+        const std::string resp =
+            "{\"enabled\":" + std::string(en ? "true" : "false") +
+            ",\"port\":" + std::to_string(port) +
+            ",\"mcpUrl\":\"http://127.0.0.1:" + std::to_string(port) + "/mcp\"}";
+        sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8", resp);
+    } else if (path == "/mcp") {
+        const std::string origin = getHttpHeader(hdrView, "origin");
+        if (!isLocalOriginAllowed(origin)) {
+            sendHttpResponse(client, 403, "Forbidden", "application/json; charset=utf-8",
+                             "{\"error\":\"Forbidden origin\"}");
+        } else if (!g_mcpEnabled.load(std::memory_order_relaxed)) {
+            sendHttpResponse(client, 403, "Forbidden", "application/json; charset=utf-8",
+                             "{\"error\":\"MCP server is disabled in GRML Settings (mcp_enabled=0).\"}");
+        } else if (method == "POST") {
+            std::lock_guard lock(g_apiMutex);
+            const std::string sid = getHttpHeader(hdrView, "mcp-session-id");
+            const auto mcpRes = grml::mcp::handlePost(g_loaderDir, sid, body);
+            std::string extra;
+            if (!mcpRes.sessionId.empty()) {
+                extra = "Mcp-Session-Id: " + mcpRes.sessionId + "\r\n";
+            }
+            sendHttpResponse(client, mcpRes.statusCode, mcpRes.statusText.c_str(),
+                             mcpRes.contentType, mcpRes.body, extra);
+        } else if (method == "GET") {
+            const char* sseHdr =
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: text/event-stream\r\n"
+                "Cache-Control: no-cache\r\n"
+                "Connection: keep-alive\r\n\r\n";
+            send(client, sseHdr, static_cast<int>(std::strlen(sseHdr)), 0);
+            const char* ping = ": connected\n\n";
+            if (send(client, ping, static_cast<int>(std::strlen(ping)), 0) > 0) {
+                int ticks = 0;
+                while (g_running.load(std::memory_order_relaxed)) {
+                    Sleep(500);
+                    if (++ticks >= 30) {
+                        ticks = 0;
+                        const char* ka = ": keepalive\n\n";
+                        if (send(client, ka, static_cast<int>(std::strlen(ka)), 0) <= 0) break;
+                    }
+                }
+            }
+        } else if (method == "DELETE") {
+            const std::string sid = getHttpHeader(hdrView, "mcp-session-id");
+            grml::mcp::closeSession(sid);
+            sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8", "{\"ok\":true}");
+        } else {
+            sendHttpResponse(client, 405, "Method Not Allowed", "text/plain", "Method Not Allowed");
+        }
     } else if (method == "GET" && path == "/api/backup-progress") {
         sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8",
                          grml::launcher_api::buildBackupProgressJson());
@@ -1407,23 +1524,46 @@ void acceptLoop()
 
 } // namespace
 
-bool start(const std::filesystem::path& loaderDir, uint16_t& outPort)
+bool start(const std::filesystem::path& loaderDir, uint16_t& outPort, const StartOptions& opts)
 {
     WSADATA wsa{};
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return false;
 
     g_loaderDir = loaderDir;
+    const std::filesystem::path dataDir = grml::getAppDataDir(loaderDir);
+    grml::IniFile cfg;
+    cfg.loadFromFile(dataDir / L"grml.ini");
+    const bool mcpEnabled = (opts.mcpOverride >= 0)
+        ? (opts.mcpOverride == 1)
+        : cfg.getBool("general", "mcp_enabled", false);
+    g_mcpEnabled.store(mcpEnabled, std::memory_order_relaxed);
+
+    uint16_t bindPort = opts.preferredPort;
+    if (bindPort == 0 && mcpEnabled) {
+        const int cfgPort = cfg.getInt("general", "mcp_port", 38420);
+        if (cfgPort > 0 && cfgPort <= 65535) bindPort = static_cast<uint16_t>(cfgPort);
+    }
+
     g_listenSock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (g_listenSock == INVALID_SOCKET) return false;
 
     sockaddr_in addr{};
     addr.sin_family      = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    addr.sin_port        = 0;
+    addr.sin_port        = htons(bindPort);
     if (bind(g_listenSock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == SOCKET_ERROR) {
-        closesocket(g_listenSock);
-        g_listenSock = INVALID_SOCKET;
-        return false;
+        if (!opts.forcePort && bindPort != 0) {
+            addr.sin_port = 0;
+            if (bind(g_listenSock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == SOCKET_ERROR) {
+                closesocket(g_listenSock);
+                g_listenSock = INVALID_SOCKET;
+                return false;
+            }
+        } else {
+            closesocket(g_listenSock);
+            g_listenSock = INVALID_SOCKET;
+            return false;
+        }
     }
     if (listen(g_listenSock, SOMAXCONN) == SOCKET_ERROR) {
         closesocket(g_listenSock);
@@ -1434,6 +1574,8 @@ bool start(const std::filesystem::path& loaderDir, uint16_t& outPort)
     int len = sizeof(addr);
     getsockname(g_listenSock, reinterpret_cast<sockaddr*>(&addr), &len);
     outPort = ntohs(addr.sin_port);
+    g_activePort.store(outPort, std::memory_order_relaxed);
+    writeMcpDiscoveryFile(dataDir, outPort, mcpEnabled);
 
     g_running.store(true, std::memory_order_relaxed);
     g_acceptThread = std::thread(acceptLoop);
@@ -1450,7 +1592,21 @@ void stop()
     if (g_acceptThread.joinable()) {
         g_acceptThread.join();
     }
+    if (!g_loaderDir.empty()) {
+        writeMcpDiscoveryFile(grml::getAppDataDir(g_loaderDir), 0, false);
+    }
+    g_activePort.store(0, std::memory_order_relaxed);
     WSACleanup();
+}
+
+bool isMcpEnabled()
+{
+    return g_mcpEnabled.load(std::memory_order_relaxed);
+}
+
+uint16_t activePort()
+{
+    return g_activePort.load(std::memory_order_relaxed);
 }
 
 } // namespace grml::http_server

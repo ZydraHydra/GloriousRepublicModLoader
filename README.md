@@ -104,6 +104,7 @@ GRML provides a pure-C ABI (`include/grml_api.h`), declarative UI schemas (`*.ui
 - [Offsets, PE-Hash Caching & `gen_sig.py`](docs/OFFSETS_AND_SIGNATURES.md)
 - [Base Offset Catalog (`config/grml_offsets.ini`)](docs/OFFSET_CATALOG.md)
 - [Direct-to-Save Launch & Intro Skip (`SOVIET64.exe` `1.2.0.9`)](docs/DIRECT_SAVE_LOAD.md)
+- [Launcher MCP Server (`POST /mcp` for AI Agents & Automated Testing)](docs/MCP_SERVER.md)
 - [Declarative & Auto-Built UI Schema](docs/DECLARATIVE_UI_SCHEMA.md)
 - [Hooking & Performance Rules](docs/HOOKING_AND_PERFORMANCE_RULES.md)
 - [Repository Guidelines (`AGENTS.md`)](AGENTS.md)

@@ -342,7 +342,13 @@
 		"maxBackupsTip": "Oldest <code>save_backup_*</code> folders are automatically removed once this limit is exceeded (<code>max_save_backups</code> in <code>grml.ini</code>, default <code>3</code>).",
 		"backupPathLabel": "Save Backup Folder",
 		"backupPathTip": "Destination folder for timestamped savegame backups (<code>save_backup_path</code> in <code>grml.ini</code>). Leave empty to use <code>%LOCALAPPDATA%\\GRML\\save_backups</code>.",
-		"backupPathPlaceholder": "%LOCALAPPDATA%\\\\GRML\\\\save_backups (default)"
+		"backupPathPlaceholder": "%LOCALAPPDATA%\\\\GRML\\\\save_backups (default)",
+		"mcpLabel": "Agent MCP Server (HTTP)",
+		"mcpActiveBadge": "Listening",
+		"mcpDisabledBadge": "Disabled",
+		"mcpTip": "Expose a local-only Model Context Protocol (<code>/mcp</code>) endpoint on <code>127.0.0.1</code> so AI agents can manage mods, edit <code>.ini</code> settings, launch directly into test saves, and inspect logs. Port changes apply on next launcher restart.",
+		"mcpCopyConfigBtn": "Copy Client Config",
+		"mcpCopiedStatus": "Copied MCP client config JSON to clipboard."
 	},
 	"backupModal": {
 		"title": "Backing Up Savegames",
