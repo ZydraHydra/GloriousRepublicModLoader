@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { app } from '$lib/stores/app.svelte';
 	import { SectionHeader } from '$lib/components/ui';
 
 	const exampleYaml = `tabTitle: My Mod Settings
@@ -39,7 +40,7 @@ controls:
 	</p>
 	<p>
 		GRML automatically renders those controls <strong>both here in the Launcher</strong> and
-		<strong>in-game inside <code>F9</code></strong>, reading &amp; saving directly to the mod's <code>.ini</code> file.
+		<strong>in-game inside the mod menu (press <code>{app.overlayHotkey}</code>)</strong>, reading &amp; saving directly to the mod's <code>.ini</code> file.
 	</p>
 	<SectionHeader title="Example: MyMod.ui.yaml" />
 	<pre class="code-block">{exampleYaml}</pre>
