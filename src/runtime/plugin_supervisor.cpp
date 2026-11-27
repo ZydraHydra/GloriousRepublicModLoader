@@ -1,4 +1,5 @@
 #include "runtime/plugin_supervisor.hpp"
+#include "runtime/hook_manager.hpp"
 #include "runtime/overlay_hub.hpp"
 #include "runtime/ring_logger.hpp"
 #include "runtime/save_events.hpp"
@@ -57,10 +58,24 @@ std::vector<AobPatternRequest>   g_pendingScans;
 std::vector<PostScanEntry>       g_postScanCallbacks;
 bool                             g_scanExecuted{false};
 std::filesystem::path            g_loaderRoot;
+std::filesystem::path            g_dataRoot;
 std::filesystem::path            g_gameExePath;
 PeModuleInfo                     g_gamePe{};
 std::string                      g_gameSha256;
 std::string                      g_gameVersion{"unknown"};
+const volatile uint8_t*          g_inGameFlagPtr{nullptr};
+void*                            g_resourceVectorAddr{nullptr};
+void*                            g_evalDistTaskAddr{nullptr};
+void*                            g_resourceGetAddr{nullptr};
+GrmlWrsrOffsets                  g_wrsrOffsets{};
+
+struct RegisteredServiceEntry {
+    std::string name;
+    uint32_t    version{0};
+    void*       ptr{nullptr};
+};
+std::mutex                          g_serviceMutex;
+std::vector<RegisteredServiceEntry> g_services;
 
 bool isFatalCrashCode(DWORD code) noexcept
 {
@@ -240,6 +255,114 @@ int32_t GRML_CALL hostGetGameInfo(GrmlGameInfo* outInfo)
     return 1;
 }
 
+int32_t GRML_CALL hostGetPluginConfigPath(
+    const char*    pluginId,
+    const wchar_t* defaultIniPath,
+    wchar_t*       outBuf,
+    uint32_t       capWchars)
+{
+    if (!pluginId || !*pluginId || !outBuf || capWchars == 0 || g_dataRoot.empty()) return 0;
+
+    std::string safeName;
+    for (const char* p = pluginId; *p; ++p) {
+        const char c = *p;
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-') {
+            safeName.push_back(c);
+        } else {
+            safeName.push_back('_');
+        }
+    }
+    if (safeName.empty()) return 0;
+
+    std::error_code ec;
+    const std::filesystem::path cfgDir = g_dataRoot / L"configs";
+    std::filesystem::create_directories(cfgDir, ec);
+
+    const std::filesystem::path targetPath = cfgDir / utf8ToWide(safeName + ".ini");
+    if (defaultIniPath && *defaultIniPath && !std::filesystem::exists(targetPath, ec)) {
+        if (std::filesystem::exists(defaultIniPath, ec)) {
+            std::filesystem::copy_file(defaultIniPath, targetPath,
+                                       std::filesystem::copy_options::skip_existing, ec);
+        }
+    }
+
+    const std::wstring& w = targetPath.wstring();
+    if (w.size() + 1 > capWchars) return 0;
+    std::wmemcpy(outBuf, w.c_str(), w.size() + 1);
+    return 1;
+}
+
+int32_t GRML_CALL hostRegisterService(const char* name, uint32_t version, void* servicePtr)
+{
+    if (!name || !*name || !servicePtr) return 0;
+    std::lock_guard lock(g_serviceMutex);
+    for (auto& s : g_services) {
+        if (s.name == name && s.version == version) {
+            s.ptr = servicePtr;
+            return 1;
+        }
+    }
+    g_services.push_back({name, version, servicePtr});
+    return 1;
+}
+
+void* GRML_CALL hostGetService(const char* name, uint32_t version)
+{
+    if (!name || !*name) return nullptr;
+    std::lock_guard lock(g_serviceMutex);
+    for (const auto& s : g_services) {
+        if (s.name == name && s.version == version) return s.ptr;
+    }
+    return nullptr;
+}
+
+int32_t GRML_CALL wrsrIsInGame(void)
+{
+    return (g_inGameFlagPtr && *g_inGameFlagPtr != 0) ? 1 : 0;
+}
+
+void* GRML_CALL wrsrResolveRipTarget(const void* instr, uint32_t dispOff, uint32_t nextIpOff)
+{
+    return resolveRipRelativeDisp32(const_cast<void*>(instr), dispOff, nextIpOff);
+}
+
+int32_t GRML_CALL wrsrGetSymbol(const char* symbolId, void** outAddr)
+{
+    if (!symbolId || !outAddr) return 0;
+    *outAddr = nullptr;
+    if (std::strcmp(symbolId, "wrsr.resource_vector") == 0) *outAddr = g_resourceVectorAddr;
+    else if (std::strcmp(symbolId, "wrsr.evaluate_dist_task") == 0) *outAddr = g_evalDistTaskAddr;
+    else if (std::strcmp(symbolId, "wrsr.resource_get") == 0) *outAddr = g_resourceGetAddr;
+    else if (std::strcmp(symbolId, "wrsr.in_game_flag") == 0) *outAddr = const_cast<uint8_t*>(g_inGameFlagPtr);
+    return (*outAddr != nullptr) ? 1 : 0;
+}
+
+int32_t GRML_CALL wrsrGetOffsets(GrmlWrsrOffsets* outOffsets)
+{
+    if (!outOffsets || outOffsets->struct_size < sizeof(GrmlWrsrOffsets)) return 0;
+    *outOffsets = g_wrsrOffsets;
+    return 1;
+}
+
+int32_t GRML_CALL wrsrGetTextSection(const void** outBase, uint32_t* outSize)
+{
+    if (!g_gamePe.textBase || g_gamePe.textSize == 0) return 0;
+    if (outBase) *outBase = g_gamePe.textBase;
+    if (outSize) *outSize = static_cast<uint32_t>(g_gamePe.textSize);
+    return 1;
+}
+
+const GrmlWrsrApi g_wrsrApi = {
+    GRML_API_VERSION,
+    sizeof(GrmlWrsrApi),
+    &wrsrIsInGame,
+    &wrsrResolveRipTarget,
+    &wrsrGetSymbol,
+    &wrsrGetOffsets,
+    &wrsrGetTextSection,
+};
+
 GrmlHostApi g_hostApi = {
     GRML_API_VERSION,
     sizeof(GrmlHostApi),
@@ -250,6 +373,11 @@ GrmlHostApi g_hostApi = {
     &hostRegisterSaveWriteEvent,
     &hostLog,
     &hostGetGameInfo,
+    nullptr, // filled with hooks::hookApi() during bootstrap
+    &g_wrsrApi,
+    &hostGetPluginConfigPath,
+    &hostRegisterService,
+    &hostGetService,
 };
 
 // ── Safe Menu Version Line Tagging (RVA-free, disp32 repoint) ────────────────
@@ -456,6 +584,7 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
 
     g_loaderRoot = loaderRootDir;
     const std::filesystem::path dataRoot = getAppDataDir(g_loaderRoot);
+    g_dataRoot = dataRoot;
     logger::init(dataRoot / L"grml.log");
     logger::logMessage(GRML_LOG_INFO, "Core", "Glorious Republic Mod Loader (GRML v%s) starting...",
                        GRML_BUILD_VERSION);
@@ -502,22 +631,87 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
 
     // Install centralized hooks, CrashGuard, Media VFS & DX11 F9 hub
     g_prevExceptionFilter = SetUnhandledExceptionFilter(&grmlUnhandledExceptionFilter);
-    g_hostApi.ui = overlay::uiApi();
+    g_hostApi.ui    = overlay::uiApi();
+    g_hostApi.hooks = hooks::hookApi();
     vfs_redirect::install(dataRoot, g_gameExePath.parent_path());
     save_events::install(dataRoot);
     overlay::install(parseHotkeyVk(grmlIni.getString("general", "overlay_hotkey", "F9")));
 
     // Resolve wrsr.resource_get & prepare Tesmio/RML compatibility host
     const uintptr_t resGetAddr = resolveResourceGet(offsetsIni.getString("signatures", "resource_get_anchor", ""));
+    g_resourceGetAddr = reinterpret_cast<void*>(resGetAddr);
     compat::initialize(g_gameExePath.parent_path(), pluginsDir, g_gameVersion, g_gameSha256, resGetAddr);
+
+    // Resolve [profile.<ver>] WRSR struct offsets from grml_offsets.ini
+    {
+        auto parseHexU32 = [](const std::string& s, uint32_t fallback) -> uint32_t {
+            if (s.empty()) return fallback;
+            char* end = nullptr;
+            unsigned long v = std::strtoul(s.c_str(), &end, 0);
+            return (end && end != s.c_str()) ? static_cast<uint32_t>(v) : fallback;
+        };
+        std::string matchedProf = "profile.default";
+        bool exactMatch = false;
+        for (const auto& sec : offsetsIni.sectionOrder()) {
+            if (sec.rfind("profile.", 0) != 0 || sec == "profile.default") continue;
+            const uint32_t ts = parseHexU32(offsetsIni.getString(sec, "pe_timestamp", ""), 0);
+            const uint32_t sz = parseHexU32(offsetsIni.getString(sec, "pe_size_of_image", ""), 0);
+            if (ts != 0 && ts == g_gamePe.timeDateStamp && (sz == 0 || sz == g_gamePe.imageSize)) {
+                matchedProf = sec;
+                exactMatch = true;
+                break;
+            }
+        }
+        auto getOff = [&](const char* key, uint32_t def) -> uint32_t {
+            std::string v = offsetsIni.getString(matchedProf, key, "");
+            if (v.empty()) v = offsetsIni.getString("profile.default", key, "");
+            return parseHexU32(v, def);
+        };
+        g_wrsrOffsets.abi_version               = GRML_API_VERSION;
+        g_wrsrOffsets.struct_size               = sizeof(GrmlWrsrOffsets);
+        g_wrsrOffsets.exact_profile_match       = exactMatch ? 1u : 0u;
+        g_wrsrOffsets.res_stride                = getOff("res_stride", 0x380);
+        g_wrsrOffsets.res_min_header_size       = getOff("res_min_header_size", 0x80);
+        g_wrsrOffsets.res_name_off              = getOff("res_name_off", 0x00);
+        g_wrsrOffsets.res_kind_off              = getOff("res_kind_off", 0x44);
+        g_wrsrOffsets.res_buy_usd_off           = getOff("res_buy_usd_off", 0x58);
+        g_wrsrOffsets.res_buy_rub_off           = getOff("res_buy_rub_off", 0x5C);
+        g_wrsrOffsets.res_sell_usd_off          = getOff("res_sell_usd_off", 0x60);
+        g_wrsrOffsets.res_sell_rub_off          = getOff("res_sell_rub_off", 0x64);
+        g_wrsrOffsets.task_res_off              = getOff("task_res_off", 0x00);
+        g_wrsrOffsets.task_src_bld_off          = getOff("task_src_bld_off", 0x10);
+        g_wrsrOffsets.task_dst_bld_off          = getOff("task_dst_bld_off", 0x48);
+        g_wrsrOffsets.task_score_src_double_off = getOff("task_score_src_double_off", 0x28);
+        g_wrsrOffsets.task_score_src_flag1_off  = getOff("task_score_src_flag1_off", 0x40);
+        g_wrsrOffsets.task_score_src_flag2_off  = getOff("task_score_src_flag2_off", 0x42);
+        g_wrsrOffsets.task_score_dst_double_off = getOff("task_score_dst_double_off", 0x60);
+        g_wrsrOffsets.task_score_dst_flag1_off  = getOff("task_score_dst_flag1_off", 0x78);
+        g_wrsrOffsets.task_score_dst_flag2_off  = getOff("task_score_dst_flag2_off", 0x7A);
+        g_wrsrOffsets.bld_desc_off              = getOff("bld_desc_off", 0x318);
+        g_wrsrOffsets.bld_faction_off           = getOff("bld_faction_off", 0x9EC);
+        g_wrsrOffsets.desc_type_off             = getOff("desc_type_off", 0x368);
+        g_wrsrOffsets.customs_building_type     = static_cast<int32_t>(getOff("customs_building_type", 20));
+        g_wrsrOffsets.faction_usd               = static_cast<int32_t>(getOff("faction_usd", 3));
+        g_wrsrOffsets.faction_rub               = static_cast<int32_t>(getOff("faction_rub", 4));
+    }
 
     // Register GRML's own internal AOB requests into the single-pass scanner
     void* inGameFlagSite = nullptr;
-    const std::string inGamePat = offsetsIni.getString("signatures", "in_game_flag_aob", "");
+    void* priceTableSite = nullptr;
+    void* evalDistSite   = nullptr;
+    const std::string inGamePat     = offsetsIni.getString("signatures", "in_game_flag_aob", "");
+    const std::string priceTablePat = offsetsIni.getString("signatures", "price_table_aob", "");
+    const std::string evalDistPat   = offsetsIni.getString("signatures", "dispatch_check_aob", "");
     {
         std::lock_guard lock(g_supMutex);
         if (!inGamePat.empty()) {
             g_pendingScans.push_back({"in_game_flag_aob", inGamePat, &inGameFlagSite, false});
+        }
+        if (!priceTablePat.empty()) {
+            g_pendingScans.push_back({"price_table_aob", priceTablePat, &priceTableSite, false});
+        }
+        if (!evalDistPat.empty()) {
+            g_pendingScans.push_back({"dispatch_check_aob", evalDistPat, &evalDistSite, false});
         }
     }
 
@@ -597,6 +791,7 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
         rec.loaded = ok;
         rec.failed = !ok;
         if (!ok) {
+            hooks::rollbackPluginHooks(rec.meta.id);
             compat::rollbackPluginHooks(rec.meta.id);
             DWORD freeExc = 0;
             sehFreeLibrary(mod, &freeExc);
@@ -641,8 +836,26 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
         const uint32_t dispOff   = static_cast<uint32_t>(offsetsIni.getInt("signatures", "in_game_flag_disp_off", 15));
         const uint32_t nextIpOff = static_cast<uint32_t>(offsetsIni.getInt("signatures", "in_game_flag_next_ip_off", 19));
         void* flagPtr = resolveRipRelativeDisp32(inGameFlagSite, dispOff, nextIpOff);
-        overlay::setInGameFlagPtr(static_cast<const volatile uint8_t*>(flagPtr));
+        g_inGameFlagPtr = static_cast<const volatile uint8_t*>(flagPtr);
+        overlay::setInGameFlagPtr(g_inGameFlagPtr);
         logger::logMessage(GRML_LOG_INFO, "AOBScanner", "in_game_flag_aob resolved -> 0x%p", flagPtr);
+    }
+    if (priceTableSite) {
+        const uint32_t vecDisp   = static_cast<uint32_t>(offsetsIni.getInt("signatures", "price_table_vec_disp_off", 14));
+        const uint32_t vecNextIp = static_cast<uint32_t>(offsetsIni.getInt("signatures", "price_table_vec_next_ip_off", 18));
+        const uint32_t strideOff = static_cast<uint32_t>(offsetsIni.getInt("signatures", "price_table_stride_imm_off", 45));
+        g_resourceVectorAddr = resolveRipRelativeDisp32(priceTableSite, vecDisp, vecNextIp);
+        uint32_t immStride = 0;
+        std::memcpy(&immStride, static_cast<const uint8_t*>(priceTableSite) + strideOff, sizeof(immStride));
+        if (immStride >= 0x200 && immStride <= 0x1000) {
+            g_wrsrOffsets.res_stride = immStride;
+        }
+        logger::logMessage(GRML_LOG_INFO, "AOBScanner", "price_table_aob resolved -> 0x%p (stride=0x%X)",
+                           g_resourceVectorAddr, g_wrsrOffsets.res_stride);
+    }
+    if (evalDistSite) {
+        g_evalDistTaskAddr = evalDistSite;
+        logger::logMessage(GRML_LOG_INFO, "AOBScanner", "dispatch_check_aob resolved -> 0x%p", g_evalDistTaskAddr);
     }
 
     // Phase 3: Post-scan callbacks & Tesmio TsmPluginStart
@@ -663,6 +876,7 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
     for (auto& rec : records) {
         if (rec.loaded && rec.module && rec.meta.hasTsmStart) {
             if (!compat::invokeTesmioStart(rec.module, rec.meta.id, rec.status)) {
+                hooks::rollbackPluginHooks(rec.meta.id);
                 compat::rollbackPluginHooks(rec.meta.id);
                 if (!rec.meta.hasGrmlInit && !rec.meta.hasRmlLoad) {
                     {
@@ -736,6 +950,7 @@ void shutdown()
 
     logger::logMessage(GRML_LOG_INFO, "Core", "GRML shutting down — unloading plugins in reverse load order");
     overlay::shutdown();
+    hooks::shutdown();
     save_events::shutdown();
     vfs_redirect::shutdown();
     compat::shutdown();

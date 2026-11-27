@@ -119,6 +119,7 @@ add_library(grml_runtime SHARED
     src/runtime/ring_logger.cpp
     src/runtime/save_events.cpp
     src/runtime/vfs_redirect.cpp
+    src/runtime/hook_manager.cpp
     src/runtime/overlay_hub.cpp
     src/runtime/tesmio_bridge.cpp
     src/runtime/plugin_supervisor.cpp

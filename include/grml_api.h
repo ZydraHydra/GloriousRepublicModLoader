@@ -21,7 +21,7 @@
 extern "C" {
 #endif
 
-#define GRML_API_VERSION 1u
+#define GRML_API_VERSION 2u
 
 #if defined(_WIN32)
   #define GRML_CALL __cdecl
@@ -51,7 +51,16 @@ typedef enum GrmlIniFieldType {
 } GrmlIniFieldType;
 
 typedef struct GrmlUiApi GrmlUiApi;
+typedef struct GrmlHookApi GrmlHookApi;
+typedef struct GrmlWrsrApi GrmlWrsrApi;
 typedef struct GrmlHostApi GrmlHostApi;
+
+/* Table flags for GrmlUiApi::BeginTable */
+#define GRML_TABLE_BORDERS      (1u << 0)
+#define GRML_TABLE_ROW_BG       (1u << 1)
+#define GRML_TABLE_RESIZABLE    (1u << 2)
+#define GRML_TABLE_SCROLL_Y     (1u << 3)
+#define GRML_TABLE_SIZING_FIXED (1u << 4)
 
 /* Callback invoked each frame while a plugin's F9 Mod Settings tab is active.
  * Always runs inside GRML's PushID + BeginChild + SEH fault-isolation sandbox. */
@@ -68,6 +77,9 @@ typedef void (GRML_CALL* GrmlPostScanFn)(void* user_data);
 
 /* Optional callback invoked after declarative .ini settings are loaded/applied. */
 typedef void (GRML_CALL* GrmlIniAppliedFn)(void* user_data);
+
+/* Callback invoked when a centralized hotkey registered via RegisterHotkey fires. */
+typedef void (GRML_CALL* GrmlHotkeyFn)(void* user_data);
 
 /* Optional exported entrypoint queried by GRML after LoadLibraryW:
  *   extern "C" __declspec(dllexport) void __cdecl GrmlPluginInit(const GrmlHostApi* host);
@@ -155,10 +167,128 @@ struct GrmlUiApi {
         const char* hook_name,
         uint64_t    calls_delta,
         double      elapsed_ms);
+
+    /* Extended immediate-mode widgets (v2+, valid ONLY inside GrmlRenderTabFn). */
+    int32_t (GRML_CALL* InputFloat)(const char* label, float* value, float step, float step_fast, const char* fmt);
+    int32_t (GRML_CALL* InputInt)(const char* label, int32_t* value, int32_t step, int32_t step_fast);
+    int32_t (GRML_CALL* InputText)(const char* label, char* buf, uint32_t buf_size);
+    int32_t (GRML_CALL* Combo)(const char* label, int32_t* current_item, const char* const* items, int32_t item_count);
+    int32_t (GRML_CALL* BeginTable)(const char* id, int32_t columns, uint32_t flags);
+    void    (GRML_CALL* EndTable)(void);
+    void    (GRML_CALL* TableNextRow)(void);
+    int32_t (GRML_CALL* TableNextColumn)(void);
+    void    (GRML_CALL* TableSetupColumn)(const char* label, float width);
+    void    (GRML_CALL* TableHeadersRow)(void);
+    void    (GRML_CALL* PushItemWidth)(float width);
+    void    (GRML_CALL* PopItemWidth)(void);
+    void    (GRML_CALL* Indent)(float width);
+    void    (GRML_CALL* Unindent)(float width);
+
+    /* Standalone hotkeyed ImGui window hosted inside GRML's single DX11 Present loop.
+     * Returns win_id >= 0 on success, or -1 on failure. */
+    int32_t (GRML_CALL* RegisterWindow)(
+        const char*     plugin_id,
+        const char*     window_id,
+        const char*     title,
+        uint32_t        default_vk,
+        GrmlRenderTabFn render_cb,
+        void*           user_data);
+    void    (GRML_CALL* SetWindowVisible)(int32_t win_id, uint8_t visible);
+    int32_t (GRML_CALL* IsWindowVisible)(int32_t win_id);
+
+    /* Centralized hotkey registration with conflict detection. Returns hotkey_id >= 0, or -1. */
+    int32_t (GRML_CALL* RegisterHotkey)(
+        const char*  plugin_id,
+        const char*  action_id,
+        const char*  label,
+        uint32_t     default_vk,
+        GrmlHotkeyFn on_trigger,
+        void*        user_data);
 };
 
 /* ============================================================================
- * GrmlHostApi (v1) — Centralized Loader Services Passed to GrmlPluginInit
+ * GrmlHookApi (v2) — Centralized MinHook Engine & Lifecycle Management
+ * ============================================================================ */
+struct GrmlHookApi {
+    uint32_t abi_version;
+    uint32_t struct_size;
+
+    int32_t (GRML_CALL* CreateHook)(
+        const char* plugin_id,
+        const char* hook_name,
+        void*       target,
+        void*       detour,
+        void**      out_original);
+
+    int32_t (GRML_CALL* CreateApiHook)(
+        const char*    plugin_id,
+        const char*    hook_name,
+        const wchar_t* module_name,
+        const char*    proc_name,
+        void*          detour,
+        void**         out_original);
+
+    int32_t (GRML_CALL* EnableHook)(void* target);
+    int32_t (GRML_CALL* DisableHook)(void* target);
+    int32_t (GRML_CALL* RemoveHook)(void* target);
+};
+
+/* ============================================================================
+ * GrmlWrsrOffsets & GrmlWrsrApi (v2) — Shared WRSR Game State & Offsets
+ * ============================================================================ */
+typedef struct GrmlWrsrOffsets {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint8_t  exact_profile_match;
+    /* ResourceRecord & ResourceVector */
+    uint32_t res_stride;
+    uint32_t res_min_header_size;
+    uint32_t res_name_off;
+    uint32_t res_kind_off;
+    uint32_t res_buy_usd_off;
+    uint32_t res_buy_rub_off;
+    uint32_t res_sell_usd_off;
+    uint32_t res_sell_rub_off;
+    /* DistTask (0x80) & Building / BuildingDescriptor */
+    uint32_t task_res_off;
+    uint32_t task_src_bld_off;
+    uint32_t task_dst_bld_off;
+    uint32_t task_score_src_double_off;
+    uint32_t task_score_src_flag1_off;
+    uint32_t task_score_src_flag2_off;
+    uint32_t task_score_dst_double_off;
+    uint32_t task_score_dst_flag1_off;
+    uint32_t task_score_dst_flag2_off;
+    uint32_t bld_desc_off;
+    uint32_t bld_faction_off;
+    uint32_t desc_type_off;
+    int32_t  customs_building_type;
+    int32_t  faction_usd;
+    int32_t  faction_rub;
+} GrmlWrsrOffsets;
+
+struct GrmlWrsrApi {
+    uint32_t abi_version;
+    uint32_t struct_size;
+
+    /* Returns 1 if player is currently in-game (not on main menu), 0 otherwise. */
+    int32_t (GRML_CALL* IsInGame)(void);
+
+    /* Resolves RIP-relative target: instr + next_ip_off + *(int32_t*)(instr + disp_off). */
+    void*   (GRML_CALL* ResolveRipTarget)(const void* instr, uint32_t disp_off, uint32_t next_ip_off);
+
+    /* Queries a resolved semantic symbol (e.g. "wrsr.resource_vector", "wrsr.evaluate_dist_task"). */
+    int32_t (GRML_CALL* GetSymbol)(const char* symbol_id, void** out_addr);
+
+    /* Populates profile-resolved WRSR struct offsets (from grml_offsets.ini). */
+    int32_t (GRML_CALL* GetOffsets)(GrmlWrsrOffsets* out_offsets);
+
+    /* Returns SOVIET64.exe .text section base and size. */
+    int32_t (GRML_CALL* GetTextSection)(const void** out_base, uint32_t* out_size);
+};
+
+/* ============================================================================
+ * GrmlHostApi (v2) — Centralized Loader Services Passed to GrmlPluginInit
  * ============================================================================ */
 struct GrmlHostApi {
     uint32_t abi_version;
@@ -189,6 +319,22 @@ struct GrmlHostApi {
 
     /* Populates GrmlGameInfo with SOVIET64.exe metadata. Returns 1 on success. */
     int32_t (GRML_CALL* GetGameInfo)(GrmlGameInfo* out_info);
+
+    /* v2 services */
+    const GrmlHookApi* hooks;
+    const GrmlWrsrApi* wrsr;
+
+    /* Resolves %LOCALAPPDATA%\GRML\configs\<plugin_id>.ini (creating directories and
+     * seeding from `default_ini_path` if non-NULL and target doesn't exist yet). */
+    int32_t (GRML_CALL* GetPluginConfigPath)(
+        const char*    plugin_id,
+        const wchar_t* default_ini_path,
+        wchar_t*       out_buf,
+        uint32_t       cap_wchars);
+
+    /* Inter-mod service registry. */
+    int32_t (GRML_CALL* RegisterService)(const char* name, uint32_t version, void* service_ptr);
+    void*   (GRML_CALL* GetService)(const char* name, uint32_t version);
 };
 
 #ifdef __cplusplus

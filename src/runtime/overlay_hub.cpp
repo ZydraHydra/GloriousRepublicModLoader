@@ -198,9 +198,38 @@ struct HookTelemetryEntry {
     double      lastFrameMs{0.0};
 };
 
+struct RegisteredWindow {
+    int32_t         winId{-1};
+    std::string     pluginId;
+    std::string     windowId;
+    std::string     title;
+    uint32_t        defaultVk{0};
+    bool            visible{false};
+    bool            uiFaulted{false};
+    DWORD           faultCode{0};
+    GrmlRenderTabFn renderCb{nullptr};
+    void*           userData{nullptr};
+};
+
+struct RegisteredHotkey {
+    int32_t      hotkeyId{-1};
+    std::string  pluginId;
+    std::string  actionId;
+    std::string  label;
+    uint32_t     vk{0};
+    std::string  conflictWith;
+    GrmlHotkeyFn onTrigger{nullptr};
+    void*        userData{nullptr};
+    int32_t      linkedWinId{-1};
+};
+
 std::mutex                      g_tabsMutex;
 std::vector<RegisteredTab>      g_tabs;
 std::vector<LoadedModSummary>   g_loadedMods;
+std::mutex                      g_winHotkeyMutex;
+std::vector<RegisteredWindow>   g_windows;
+std::vector<RegisteredHotkey>   g_hotkeys;
+std::atomic<bool>               g_anyExtWindowVisible{false};
 std::mutex                      g_telemetryMutex;
 std::vector<HookTelemetryEntry> g_telemetry;
 std::filesystem::path           g_pluginsDir;
@@ -634,6 +663,165 @@ void GRML_CALL uiReportHookTiming(const char* pluginId, const char* hookName, ui
     g_telemetry.push_back(std::move(e));
 }
 
+int32_t GRML_CALL uiInputFloat(const char* label, float* value, float step, float stepFast, const char* fmt)
+{
+    if (!label || !value) return 0;
+    return ImGui::InputFloat(label, value, step, stepFast, fmt ? fmt : "%.3f") ? 1 : 0;
+}
+
+int32_t GRML_CALL uiInputInt(const char* label, int32_t* value, int32_t step, int32_t stepFast)
+{
+    if (!label || !value) return 0;
+    return ImGui::InputInt(label, value, step, stepFast) ? 1 : 0;
+}
+
+int32_t GRML_CALL uiInputText(const char* label, char* buf, uint32_t bufSize)
+{
+    if (!label || !buf || bufSize == 0) return 0;
+    return ImGui::InputText(label, buf, bufSize) ? 1 : 0;
+}
+
+int32_t GRML_CALL uiCombo(const char* label, int32_t* currentItem, const char* const* items, int32_t itemCount)
+{
+    if (!label || !currentItem || !items || itemCount <= 0) return 0;
+    return ImGui::Combo(label, currentItem, items, itemCount) ? 1 : 0;
+}
+
+int32_t GRML_CALL uiBeginTable(const char* id, int32_t columns, uint32_t flags)
+{
+    if (!id || columns <= 0) return 0;
+    ImGuiTableFlags imFlags = ImGuiTableFlags_None;
+    if (flags & GRML_TABLE_BORDERS)      imFlags |= ImGuiTableFlags_Borders;
+    if (flags & GRML_TABLE_ROW_BG)       imFlags |= ImGuiTableFlags_RowBg;
+    if (flags & GRML_TABLE_RESIZABLE)    imFlags |= ImGuiTableFlags_Resizable;
+    if (flags & GRML_TABLE_SCROLL_Y)     imFlags |= ImGuiTableFlags_ScrollY;
+    if (flags & GRML_TABLE_SIZING_FIXED) imFlags |= ImGuiTableFlags_SizingFixedFit;
+    return ImGui::BeginTable(id, columns, imFlags) ? 1 : 0;
+}
+
+void GRML_CALL uiEndTable(void)                      { ImGui::EndTable(); }
+void GRML_CALL uiTableNextRow(void)                  { ImGui::TableNextRow(); }
+int32_t GRML_CALL uiTableNextColumn(void)            { return ImGui::TableNextColumn() ? 1 : 0; }
+void GRML_CALL uiTableSetupColumn(const char* label, float width)
+{
+    if (!label) return;
+    if (width > 0.0f) ImGui::TableSetupColumn(label, ImGuiTableColumnFlags_WidthFixed, width);
+    else ImGui::TableSetupColumn(label);
+}
+void GRML_CALL uiTableHeadersRow(void)               { ImGui::TableHeadersRow(); }
+void GRML_CALL uiPushItemWidth(float width)          { ImGui::PushItemWidth(width); }
+void GRML_CALL uiPopItemWidth(void)                  { ImGui::PopItemWidth(); }
+void GRML_CALL uiIndent(float width)                 { ImGui::Indent(width); }
+void GRML_CALL uiUnindent(float width)               { ImGui::Unindent(width); }
+
+void refreshAnyExtWindowVisibleLocked()
+{
+    bool any = false;
+    for (const auto& w : g_windows) {
+        if (w.visible) { any = true; break; }
+    }
+    g_anyExtWindowVisible.store(any, std::memory_order_relaxed);
+}
+
+int32_t registerHotkeyInternal(
+    const char*  pluginId,
+    const char*  actionId,
+    const char*  label,
+    uint32_t     defaultVk,
+    GrmlHotkeyFn onTrigger,
+    void*        userData,
+    int32_t      linkedWinId)
+{
+    if (!pluginId || !*pluginId || !actionId || !*actionId || defaultVk == 0) return -1;
+
+    std::string conflict;
+    if (defaultVk == g_toggleVk.load(std::memory_order_relaxed)) {
+        conflict = "GRML Mod Settings overlay";
+    } else {
+        for (const auto& hk : g_hotkeys) {
+            if (hk.vk == defaultVk) {
+                conflict = hk.pluginId + " (" + hk.label + ")";
+                break;
+            }
+        }
+    }
+    if (!conflict.empty()) {
+        logger::logMessage(GRML_LOG_WARN, "Hotkeys",
+                           "[HOTKEY CONFLICT] Plugin '%s' (%s) VK=0x%X conflicts with %s",
+                           pluginId, label ? label : actionId, defaultVk, conflict.c_str());
+    }
+
+    RegisteredHotkey hk;
+    hk.hotkeyId     = static_cast<int32_t>(g_hotkeys.size());
+    hk.pluginId     = pluginId;
+    hk.actionId     = actionId;
+    hk.label        = label ? label : actionId;
+    hk.vk           = defaultVk;
+    hk.conflictWith = std::move(conflict);
+    hk.onTrigger    = onTrigger;
+    hk.userData     = userData;
+    hk.linkedWinId  = linkedWinId;
+    g_hotkeys.push_back(std::move(hk));
+    return g_hotkeys.back().hotkeyId;
+}
+
+int32_t GRML_CALL uiRegisterWindow(
+    const char*     pluginId,
+    const char*     windowId,
+    const char*     title,
+    uint32_t        defaultVk,
+    GrmlRenderTabFn renderCb,
+    void*           userData)
+{
+    if (!pluginId || !*pluginId || !windowId || !*windowId || !title || !renderCb) return -1;
+    std::lock_guard lock(g_winHotkeyMutex);
+    for (const auto& w : g_windows) {
+        if (w.pluginId == pluginId && w.windowId == windowId) return w.winId;
+    }
+    RegisteredWindow w;
+    w.winId     = static_cast<int32_t>(g_windows.size());
+    w.pluginId  = pluginId;
+    w.windowId  = windowId;
+    w.title     = title;
+    w.defaultVk = defaultVk;
+    w.renderCb  = renderCb;
+    w.userData  = userData;
+    g_windows.push_back(std::move(w));
+    const int32_t id = g_windows.back().winId;
+    if (defaultVk != 0) {
+        registerHotkeyInternal(pluginId, windowId, title, defaultVk, nullptr, nullptr, id);
+    }
+    return id;
+}
+
+void GRML_CALL uiSetWindowVisible(int32_t winId, uint8_t visible)
+{
+    std::lock_guard lock(g_winHotkeyMutex);
+    if (winId < 0 || static_cast<size_t>(winId) >= g_windows.size()) return;
+    g_windows[static_cast<size_t>(winId)].visible = (visible != 0);
+    refreshAnyExtWindowVisibleLocked();
+}
+
+int32_t GRML_CALL uiIsWindowVisible(int32_t winId)
+{
+    std::lock_guard lock(g_winHotkeyMutex);
+    if (winId < 0 || static_cast<size_t>(winId) >= g_windows.size()) return 0;
+    return g_windows[static_cast<size_t>(winId)].visible ? 1 : 0;
+}
+
+int32_t GRML_CALL uiRegisterHotkey(
+    const char*  pluginId,
+    const char*  actionId,
+    const char*  label,
+    uint32_t     defaultVk,
+    GrmlHotkeyFn onTrigger,
+    void*        userData)
+{
+    if (!onTrigger) return -1;
+    std::lock_guard lock(g_winHotkeyMutex);
+    return registerHotkeyInternal(pluginId, actionId, label, defaultVk, onTrigger, userData, -1);
+}
+
 const GrmlUiApi g_grmlUiApi = {
     GRML_API_VERSION,
     sizeof(GrmlUiApi),
@@ -654,6 +842,24 @@ const GrmlUiApi g_grmlUiApi = {
     &uiCollapsingHeader,
     &uiSetItemTooltip,
     &uiReportHookTiming,
+    &uiInputFloat,
+    &uiInputInt,
+    &uiInputText,
+    &uiCombo,
+    &uiBeginTable,
+    &uiEndTable,
+    &uiTableNextRow,
+    &uiTableNextColumn,
+    &uiTableSetupColumn,
+    &uiTableHeadersRow,
+    &uiPushItemWidth,
+    &uiPopItemWidth,
+    &uiIndent,
+    &uiUnindent,
+    &uiRegisterWindow,
+    &uiSetWindowVisible,
+    &uiIsWindowVisible,
+    &uiRegisterHotkey,
 };
 
 // ── Legacy WRSR_ModOverlay_<PID> Host Callbacks ──────────────────────────────
@@ -1062,14 +1268,47 @@ void createRenderTarget(IDXGISwapChain* sc)
 LRESULT CALLBACK hookedWndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     const uint16_t vk = g_toggleVk.load(std::memory_order_relaxed);
-    if (msg == WM_KEYDOWN && wp == vk && ((lp & (1LL << 30)) == 0)) {
-        toggleOverlay(!g_visible.load(std::memory_order_relaxed));
-        return 0;
+    if (msg == WM_KEYDOWN && ((lp & (1LL << 30)) == 0)) {
+        if (wp == vk) {
+            toggleOverlay(!g_visible.load(std::memory_order_relaxed));
+            return 0;
+        }
+        if (!g_wantCaptureKeyboard.load(std::memory_order_relaxed)) {
+            bool handledHotkey = false;
+            std::vector<std::pair<GrmlHotkeyFn, void*>> toCall;
+            {
+                std::lock_guard lock(g_winHotkeyMutex);
+                for (const auto& hk : g_hotkeys) {
+                    if (hk.vk == static_cast<uint32_t>(wp)) {
+                        if (hk.linkedWinId >= 0 && static_cast<size_t>(hk.linkedWinId) < g_windows.size()) {
+                            auto& w = g_windows[static_cast<size_t>(hk.linkedWinId)];
+                            w.visible = !w.visible;
+                            refreshAnyExtWindowVisibleLocked();
+                            handledHotkey = true;
+                        } else if (hk.onTrigger) {
+                            toCall.emplace_back(hk.onTrigger, hk.userData);
+                            handledHotkey = true;
+                        }
+                    }
+                }
+            }
+            for (const auto& [fn, ud] : toCall) {
+                fn(ud);
+            }
+            if (handledHotkey) return 0;
+        }
     }
 
-    if (g_visible.load(std::memory_order_relaxed)) {
+    const bool anyVisible = g_visible.load(std::memory_order_relaxed) ||
+                            g_anyExtWindowVisible.load(std::memory_order_relaxed);
+    if (anyVisible) {
         if (msg == WM_KEYDOWN && wp == VK_ESCAPE && ((lp & (1LL << 30)) == 0)) {
             toggleOverlay(false);
+            {
+                std::lock_guard lock(g_winHotkeyMutex);
+                for (auto& w : g_windows) w.visible = false;
+                refreshAnyExtWindowVisibleLocked();
+            }
             return 0;
         }
         const bool isMouseMsg = (msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST) || msg == WM_INPUT;
@@ -1378,7 +1617,9 @@ void renderUI()
 {
     rolloverTelemetryFrame();
 
-    if (!g_visible.load(std::memory_order_relaxed)) {
+    const bool mainVisible = g_visible.load(std::memory_order_relaxed);
+    const bool extVisible  = g_anyExtWindowVisible.load(std::memory_order_relaxed);
+    if (!mainVisible && !extVisible) {
         g_wantCaptureMouse.store(false, std::memory_order_relaxed);
         g_wantCaptureKeyboard.store(false, std::memory_order_relaxed);
         g_rectValid.store(false, std::memory_order_relaxed);
@@ -1393,8 +1634,10 @@ void renderUI()
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
-    ImGui::SetNextWindowSize(ImVec2(660.f, 440.f), ImGuiCond_FirstUseEver);
-    bool open = true;
+    bool open = mainVisible;
+    if (mainVisible) {
+        ImGui::SetNextWindowSize(ImVec2(660.f, 440.f), ImGuiCond_FirstUseEver);
+    }
     char titleBuf[64]{};
     const uint16_t curVk = g_toggleVk.load(std::memory_order_relaxed);
     if (curVk >= VK_F1 && curVk <= VK_F12) {
@@ -1419,8 +1662,8 @@ void renderUI()
     } else {
         std::snprintf(titleBuf, sizeof(titleBuf), "GRML Mod Settings [F9]###GRML_ModSettings");
     }
-    const bool windowOpen = ImGui::Begin(titleBuf, &open, ImGuiWindowFlags_NoCollapse);
-    {
+    const bool windowOpen = mainVisible && ImGui::Begin(titleBuf, &open, ImGuiWindowFlags_NoCollapse);
+    if (mainVisible) {
         const ImVec2 pos  = ImGui::GetWindowPos();
         const ImVec2 size = ImGui::GetWindowSize();
         g_rectL.store(static_cast<int32_t>(pos.x), std::memory_order_relaxed);
@@ -1518,7 +1761,44 @@ void renderUI()
             }
         }
     }
-    ImGui::End();
+    if (mainVisible) {
+        ImGui::End();
+    }
+
+    // Render standalone plugin windows (e.g. F8 pop-out tools)
+    {
+        std::lock_guard lock(g_winHotkeyMutex);
+        bool visChanged = false;
+        for (auto& w : g_windows) {
+            if (!w.visible) continue;
+            bool wOpen = true;
+            ImGui::SetNextWindowSize(ImVec2(760.f, 520.f), ImGuiCond_FirstUseEver);
+            std::string winTitle = w.title + "###GRML_Win_" + w.pluginId + "_" + w.windowId;
+            if (ImGui::Begin(winTitle.c_str(), &wOpen, ImGuiWindowFlags_NoCollapse)) {
+                ImGui::PushID(w.winId);
+                if (w.uiFaulted) {
+                    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.f),
+                                       "[UI Faulted - Disabled] Exception 0x%08lX", w.faultCode);
+                } else if (w.renderCb) {
+                    DWORD excCode = 0;
+                    if (!invokeRenderTabSeh(w.renderCb, &g_grmlUiApi, w.userData, &excCode)) {
+                        w.uiFaulted = true;
+                        w.faultCode = excCode;
+                        logger::logMessage(GRML_LOG_ERROR, "OverlayHub",
+                                           "Window '%s' faulted (0x%08lX) — marked [UI Faulted - Disabled]",
+                                           w.title.c_str(), excCode);
+                    }
+                }
+                ImGui::PopID();
+            }
+            ImGui::End();
+            if (!wOpen) {
+                w.visible = false;
+                visChanged = true;
+            }
+        }
+        if (visChanged) refreshAnyExtWindowVisibleLocked();
+    }
 
     const bool mouseCaptured =
         io.WantCaptureMouse ||
@@ -1530,7 +1810,7 @@ void renderUI()
     g_wantCaptureKeyboard.store(io.WantTextInput || io.WantCaptureKeyboard, std::memory_order_relaxed);
     io.MouseDrawCursor = isMouseLockedForGame();
 
-    if (!open) toggleOverlay(false);
+    if (mainVisible && !open) toggleOverlay(false);
 
     ImGui::Render();
     std::lock_guard lock(g_d3dMutex);
