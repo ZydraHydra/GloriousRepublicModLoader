@@ -1,0 +1,89 @@
+name: Check WRSR Steam Update (App 784150)
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-steam-build:
+    name: Check Steam Public Branch BuildID (784150)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Query Steam Public Build & Open Issue on Update
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          STATE_FILE=".github/wrsr_build_state.json"
+          KNOWN_BUILD=$(jq -r '.buildid' "$STATE_FILE")
+          KNOWN_VER=$(jq -r '.verified_version' "$STATE_FILE")
+
+          RESP=$(curl -fsSL --retry 3 "https://api.steamcmd.net/v1/info/784150")
+          NEW_BUILD=$(echo "$RESP" | jq -r '.data["784150"].depots.branches.public.buildid // empty')
+          NEW_TS=$(echo "$RESP" | jq -r '.data["784150"].depots.branches.public.timeupdated // empty')
+
+          if [[ -z "$NEW_BUILD" ]]; then
+            echo "Warning: Could not read public buildid from api.steamcmd.net; skipping."
+            exit 0
+          fi
+
+          echo "Known buildid: $KNOWN_BUILD ($KNOWN_VER)"
+          echo "Steam public buildid: $NEW_BUILD (timeupdated=$NEW_TS)"
+
+          if (( NEW_BUILD <= KNOWN_BUILD )); then
+            echo "No new WRSR public build detected."
+            exit 0
+          fi
+
+          # Avoid duplicate issues if an issue for this buildid already exists
+          EXISTING=$(gh issue list --state all --search "$NEW_BUILD in:title" --json number --jq 'length')
+          if (( EXISTING > 0 )); then
+            echo "Issue for buildid $NEW_BUILD already exists."
+            exit 0
+          fi
+
+          UPDATED_UTC=$(date -u -d "@$NEW_TS" +"%Y-%m-%d %H:%M:%S UTC" 2>/dev/null || echo "$NEW_TS")
+
+          gh label create "game-update" \
+            --description "New WRSR Steam build detected — verify/update grml_offsets.ini" \
+            --color "D4A853" \
+            --force || true
+
+          BODY=$(cat <<EOF
+          A new **Workers & Resources: Soviet Republic** (\`784150\`) public Steam build was detected.
+
+          | Field | Value |
+          | :--- | :--- |
+          | **New Steam BuildID** | \`$NEW_BUILD\` |
+          | **Updated (UTC)** | \`$UPDATED_UTC\` |
+          | **Previous Known BuildID** | \`$KNOWN_BUILD\` (v\`$KNOWN_VER\`) |
+          | **SteamDB Patchnotes** | https://steamdb.info/app/784150/patchnotes/ |
+
+          ### Offset & Signature Update Checklist
+          - [ ] Update WRSR on Steam and verify all existing signatures:
+            \`\`\`powershell
+            .venv\Scripts\python scripts\gen_sig.py --exe "<PathToSOVIET64.exe>" --verify-all
+            \`\`\`
+          - [ ] For any \`MISSING\` or \`AMBIGUOUS\` section, regenerate the signature with \`gen_sig.py\`:
+            \`\`\`powershell
+            .venv\Scripts\python scripts\gen_sig.py --exe "<PathToSOVIET64.exe>" --rva 0x<RVA> --name <Section> --mode <function_start|rip_rel32|call_rel32|disp32> --write
+            \`\`\`
+          - [ ] Add the new \`[profile.<version>]\` (\`pe_timestamp\`, \`pe_size_of_image\`) and \`[builds]\` SHA-256 entry to \`config/grml_offsets.ini\`.
+          - [ ] Update \`.github/wrsr_build_state.json\` to \`buildid: "$NEW_BUILD"\` and the new \`verified_version\`.
+          - [ ] Run \`.\build.ps1\` and push \`config/grml_offsets.ini\` to \`main\` (existing GRML launchers can pull it via **Update Offsets (GitHub OTA)**).
+          EOF
+          )
+
+          gh issue create \
+            --title "WRSR Game Update Detected: Steam Build $NEW_BUILD" \
+            --label "game-update" \
+            --body "$BODY"
