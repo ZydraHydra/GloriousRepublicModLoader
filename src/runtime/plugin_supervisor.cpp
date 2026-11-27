@@ -7,6 +7,7 @@
 #include "runtime/vfs_redirect.hpp"
 #include "common/ini_util.hpp"
 #include "common/manifest.hpp"
+#include "common/offset_resolver.hpp"
 #include "common/pe_scanner.hpp"
 #include "common/ui_schema.hpp"
 #include "embedded_grml_offsets.hpp"
@@ -68,6 +69,7 @@ void*                            g_resourceVectorAddr{nullptr};
 void*                            g_evalDistTaskAddr{nullptr};
 void*                            g_resourceGetAddr{nullptr};
 GrmlWrsrOffsets                  g_wrsrOffsets{};
+std::vector<offsets::ResolvedOffsetEntry> g_resolvedOffsets;
 
 struct RegisteredServiceEntry {
     std::string name;
@@ -317,6 +319,25 @@ void* GRML_CALL hostGetService(const char* name, uint32_t version)
     return nullptr;
 }
 
+int32_t GRML_CALL hostResolveNamedOffset(const char* sectionName, uintptr_t* outValue)
+{
+    if (!sectionName || !*sectionName || !outValue) return 0;
+    *outValue = 0;
+    std::string want = sectionName;
+    for (char& c : want) {
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + ('a' - 'A'));
+    }
+    std::lock_guard lock(g_supMutex);
+    for (const auto& e : g_resolvedOffsets) {
+        if (e.def.name == want &&
+            (e.status == offsets::OffsetStatus::Ok || e.status == offsets::OffsetStatus::Cached)) {
+            *outValue = e.resolvedValue;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int32_t GRML_CALL wrsrIsInGame(void)
 {
     return (g_inGameFlagPtr && *g_inGameFlagPtr != 0) ? 1 : 0;
@@ -378,6 +399,7 @@ GrmlHostApi g_hostApi = {
     &hostGetPluginConfigPath,
     &hostRegisterService,
     &hostGetService,
+    &hostResolveNamedOffset,
 };
 
 std::wstring formatHotkeyLabelW(uint16_t vk)
@@ -618,22 +640,23 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
     }
     inspectLoadedPe(reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr)), g_gamePe);
 
-    // Load grml_offsets.ini (embedded baseline + external override)
+    // Load grml_offsets.ini (embedded baseline + external/OTA override)
     IniFile offsetsIni;
-    offsetsIni.loadFromMemory(generated::kEmbeddedGrmlOffsetsIni);
-    if (std::filesystem::exists(g_loaderRoot / L"grml_offsets.ini")) {
-        IniFile ext;
-        if (ext.loadFromFile(g_loaderRoot / L"grml_offsets.ini")) {
-            offsetsIni.merge(ext);
-            logger::logMessage(GRML_LOG_INFO, "Offsets", "Merged external grml_offsets.ini");
-        }
-    }
+    uint64_t offsetsIniHash = 0;
+    offsets::loadMergedOffsetsIni(g_loaderRoot, dataRoot, generated::kEmbeddedGrmlOffsetsIni,
+                                  offsetsIni, offsetsIniHash);
 
     if (!g_gameSha256.empty()) {
         g_gameVersion = offsetsIni.getString("builds", g_gameSha256, "unknown");
     }
-    logger::logMessage(GRML_LOG_INFO, "Game", "SOVIET64.exe version=%s TimeDateStamp=0x%08X SizeOfImage=0x%zX SHA256=%s",
+    if (g_gameVersion == "unknown" && !g_gameExePath.empty()) {
+        const std::string peVer = readPeFileVersion(g_gameExePath);
+        if (!peVer.empty()) g_gameVersion = peVer;
+    }
+    logger::logMessage(GRML_LOG_INFO, "Game",
+                       "SOVIET64.exe version=%s TimeDateStamp=0x%08X SizeOfImage=0x%zX EntryPoint=0x%X SHA256=%s",
                        g_gameVersion.c_str(), g_gamePe.timeDateStamp, g_gamePe.imageSize,
+                       g_gamePe.addressOfEntryPoint,
                        g_gameSha256.empty() ? "(unavailable)" : g_gameSha256.c_str());
 
     // Load grml.ini from AppData\Local\GRML
@@ -663,58 +686,38 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
     g_resourceGetAddr = reinterpret_cast<void*>(resGetAddr);
     compat::initialize(g_gameExePath.parent_path(), pluginsDir, g_gameVersion, g_gameSha256, resGetAddr);
 
-    // Resolve [profile.<ver>] WRSR struct offsets from grml_offsets.ini
+    // Resolve [profile.<ver>] WRSR struct offsets from grml_offsets.ini (with recursive base= inheritance)
+    offsets::resolveWrsrProfileOffsets(offsetsIni, g_gamePe, g_wrsrOffsets);
+
+    // Prepare declarative grml_offsets.ini entries + PE-hash RVA cache check
+    const std::filesystem::path offsetCachePath = dataRoot / L"grml_offset_cache.ini";
+    const std::vector<offsets::OffsetDefinition> offsetDefs = offsets::collectOffsetDefinitions(offsetsIni);
+    bool allOffsetsCached = false;
+    std::vector<void*> declMatchSites(offsetDefs.size(), nullptr);
     {
-        auto parseHexU32 = [](const std::string& s, uint32_t fallback) -> uint32_t {
-            if (s.empty()) return fallback;
-            char* end = nullptr;
-            unsigned long v = std::strtoul(s.c_str(), &end, 0);
-            return (end && end != s.c_str()) ? static_cast<uint32_t>(v) : fallback;
-        };
-        std::string matchedProf = "profile.default";
-        bool exactMatch = false;
-        for (const auto& sec : offsetsIni.sectionOrder()) {
-            if (sec.rfind("profile.", 0) != 0 || sec == "profile.default") continue;
-            const uint32_t ts = parseHexU32(offsetsIni.getString(sec, "pe_timestamp", ""), 0);
-            const uint32_t sz = parseHexU32(offsetsIni.getString(sec, "pe_size_of_image", ""), 0);
-            if (ts != 0 && ts == g_gamePe.timeDateStamp && (sz == 0 || sz == g_gamePe.imageSize)) {
-                matchedProf = sec;
-                exactMatch = true;
-                break;
+        std::lock_guard lock(g_supMutex);
+        allOffsetsCached = offsets::tryResolveFromCache(offsetCachePath, g_gamePe, offsetsIniHash,
+                                                        offsetDefs, g_resolvedOffsets);
+        for (size_t i = 0; i < g_resolvedOffsets.size(); ++i) {
+            if (g_resolvedOffsets[i].status != offsets::OffsetStatus::Cached) {
+                g_pendingScans.push_back({g_resolvedOffsets[i].def.name,
+                                          g_resolvedOffsets[i].def.pattern,
+                                          &declMatchSites[i],
+                                          g_resolvedOffsets[i].def.required});
             }
         }
-        auto getOff = [&](const char* key, uint32_t def) -> uint32_t {
-            std::string v = offsetsIni.getString(matchedProf, key, "");
-            if (v.empty()) v = offsetsIni.getString("profile.default", key, "");
-            return parseHexU32(v, def);
-        };
-        g_wrsrOffsets.abi_version               = GRML_API_VERSION;
-        g_wrsrOffsets.struct_size               = sizeof(GrmlWrsrOffsets);
-        g_wrsrOffsets.exact_profile_match       = exactMatch ? 1u : 0u;
-        g_wrsrOffsets.res_stride                = getOff("res_stride", 0x380);
-        g_wrsrOffsets.res_min_header_size       = getOff("res_min_header_size", 0x80);
-        g_wrsrOffsets.res_name_off              = getOff("res_name_off", 0x00);
-        g_wrsrOffsets.res_kind_off              = getOff("res_kind_off", 0x44);
-        g_wrsrOffsets.res_buy_usd_off           = getOff("res_buy_usd_off", 0x58);
-        g_wrsrOffsets.res_buy_rub_off           = getOff("res_buy_rub_off", 0x5C);
-        g_wrsrOffsets.res_sell_usd_off          = getOff("res_sell_usd_off", 0x60);
-        g_wrsrOffsets.res_sell_rub_off          = getOff("res_sell_rub_off", 0x64);
-        g_wrsrOffsets.task_res_off              = getOff("task_res_off", 0x00);
-        g_wrsrOffsets.task_src_bld_off          = getOff("task_src_bld_off", 0x10);
-        g_wrsrOffsets.task_dst_bld_off          = getOff("task_dst_bld_off", 0x48);
-        g_wrsrOffsets.task_score_src_double_off = getOff("task_score_src_double_off", 0x28);
-        g_wrsrOffsets.task_score_src_flag1_off  = getOff("task_score_src_flag1_off", 0x40);
-        g_wrsrOffsets.task_score_src_flag2_off  = getOff("task_score_src_flag2_off", 0x42);
-        g_wrsrOffsets.task_score_dst_double_off = getOff("task_score_dst_double_off", 0x60);
-        g_wrsrOffsets.task_score_dst_flag1_off  = getOff("task_score_dst_flag1_off", 0x78);
-        g_wrsrOffsets.task_score_dst_flag2_off  = getOff("task_score_dst_flag2_off", 0x7A);
-        g_wrsrOffsets.bld_desc_off              = getOff("bld_desc_off", 0x318);
-        g_wrsrOffsets.bld_faction_off           = getOff("bld_faction_off", 0x9EC);
-        g_wrsrOffsets.desc_type_off             = getOff("desc_type_off", 0x368);
-        g_wrsrOffsets.customs_building_type     = static_cast<int32_t>(getOff("customs_building_type", 20));
-        g_wrsrOffsets.faction_usd               = static_cast<int32_t>(getOff("faction_usd", 3));
-        g_wrsrOffsets.faction_rub               = static_cast<int32_t>(getOff("faction_rub", 4));
     }
+    if (allOffsetsCached && !offsetDefs.empty()) {
+        logger::logMessage(GRML_LOG_INFO, "Offsets",
+                           "PE-hash RVA cache hit (%zu entries verified in O(1))", offsetDefs.size());
+    }
+
+    auto hasDeclSection = [&](const char* name) {
+        for (const auto& d : offsetDefs) {
+            if (d.name == name) return true;
+        }
+        return false;
+    };
 
     // Register GRML's own internal AOB requests into the single-pass scanner
     void* inGameFlagSite    = nullptr;
@@ -724,9 +727,9 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
     void* menuUiStateSite   = nullptr;
     void* loadSaveHdrSite   = nullptr;
     void* loadSaveTrigSite  = nullptr;
-    const std::string inGamePat       = offsetsIni.getString("signatures", "in_game_flag_aob", "");
-    const std::string priceTablePat   = offsetsIni.getString("signatures", "price_table_aob", "");
-    const std::string evalDistPat     = offsetsIni.getString("signatures", "dispatch_check_aob", "");
+    const std::string inGamePat       = hasDeclSection("in_game_flag") ? std::string{} : offsetsIni.getString("signatures", "in_game_flag_aob", "");
+    const std::string priceTablePat   = hasDeclSection("resource_vector") ? std::string{} : offsetsIni.getString("signatures", "price_table_aob", "");
+    const std::string evalDistPat     = hasDeclSection("evaluate_dist_task") ? std::string{} : offsetsIni.getString("signatures", "dispatch_check_aob", "");
     const std::string menuLoopPat     = offsetsIni.getString("signatures", "main_menu_loop_aob", "");
     const std::string menuUiStatePat  = offsetsIni.getString("signatures", "main_menu_uistate_aob", "");
     const std::string loadSaveHdrPat  = offsetsIni.getString("signatures", "load_save_header_aob", "");
@@ -849,7 +852,7 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
         records.push_back(std::move(rec));
     }
 
-    // Phase 2: Single-pass .text AOB scan across GRML + all plugin requests
+    // Phase 2: Single-pass .text AOB scan across uncached grml_offsets.ini + plugin requests
     {
         std::vector<AobPatternRequest> scans;
         {
@@ -870,10 +873,61 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
                 }
             }
         }
+
+        // Finalize declarative offset entries & update PE-hash RVA cache on miss
+        {
+            std::lock_guard lock(g_supMutex);
+            for (size_t i = 0; i < g_resolvedOffsets.size(); ++i) {
+                auto& entry = g_resolvedOffsets[i];
+                if (entry.status == offsets::OffsetStatus::Cached) continue;
+
+                size_t foundCount = 0;
+                for (const auto& s : scans) {
+                    if (s.outAddr == &declMatchSites[i]) {
+                        foundCount = s.matchCount;
+                        break;
+                    }
+                }
+                entry.matchCount = foundCount;
+                const auto* site = static_cast<const uint8_t*>(declMatchSites[i]);
+                uintptr_t resolvedVal = 0;
+                if (foundCount == 1 && site &&
+                    offsets::applyOffsetResolveRule(g_gamePe, site, entry.def, resolvedVal)) {
+                    entry.status        = offsets::OffsetStatus::Ok;
+                    entry.matchedRva    = static_cast<uint32_t>(site - g_gamePe.base);
+                    entry.resolvedValue = resolvedVal;
+                } else {
+                    entry.status        = offsets::OffsetStatus::Missing;
+                    entry.matchedRva    = 0;
+                    entry.resolvedValue = 0;
+                    logger::logMessage(GRML_LOG_WARN, "Offsets",
+                                       "[OFFSET MISSING] Section '%s' matched %zu time(s) (expected 1) — marked MISSING",
+                                       entry.def.name.c_str(), entry.matchCount);
+                }
+            }
+            if (!allOffsetsCached && !g_resolvedOffsets.empty()) {
+                if (offsets::writeOffsetCache(offsetCachePath, g_gamePe, offsetsIniHash, g_resolvedOffsets)) {
+                    logger::logMessage(GRML_LOG_INFO, "Offsets", "Updated PE-hash RVA cache (grml_offset_cache.ini)");
+                }
+            }
+            save_events::SessionDiagnosticsSnapshot snap;
+            snap.gameVersion    = g_gameVersion;
+            snap.peTimestamp    = g_gamePe.timeDateStamp;
+            snap.peSizeOfImage  = static_cast<uint32_t>(g_gamePe.imageSize);
+            snap.peEntryPoint   = g_gamePe.addressOfEntryPoint;
+            snap.offsetsFnv1a64 = offsetsIniHash;
+            snap.offsets        = g_resolvedOffsets;
+            save_events::publishOffsetDiagnostics(std::move(snap));
+        }
     }
 
-    // Apply in-game flag pointer if single-match succeeded
-    if (inGameFlagSite) {
+    // Apply GRML internal targets from declarative sections (with legacy [signatures] fallback)
+    uintptr_t namedVal = 0;
+    if (hostResolveNamedOffset("in_game_flag", &namedVal) && namedVal != 0) {
+        g_inGameFlagPtr = reinterpret_cast<const volatile uint8_t*>(namedVal);
+        overlay::setInGameFlagPtr(g_inGameFlagPtr);
+        logger::logMessage(GRML_LOG_INFO, "Offsets", "in_game_flag resolved -> 0x%p", g_inGameFlagPtr);
+    } else if (inGameFlagSite) {
         const uint32_t dispOff   = static_cast<uint32_t>(offsetsIni.getInt("signatures", "in_game_flag_disp_off", 15));
         const uint32_t nextIpOff = static_cast<uint32_t>(offsetsIni.getInt("signatures", "in_game_flag_next_ip_off", 19));
         void* flagPtr = resolveRipRelativeDisp32(inGameFlagSite, dispOff, nextIpOff);
@@ -881,7 +935,16 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
         overlay::setInGameFlagPtr(g_inGameFlagPtr);
         logger::logMessage(GRML_LOG_INFO, "AOBScanner", "in_game_flag_aob resolved -> 0x%p", flagPtr);
     }
-    if (priceTableSite) {
+
+    if (hostResolveNamedOffset("resource_vector", &namedVal) && namedVal != 0) {
+        g_resourceVectorAddr = reinterpret_cast<void*>(namedVal);
+        uintptr_t strideVal = 0;
+        if (hostResolveNamedOffset("resource_stride", &strideVal) && strideVal >= 0x200 && strideVal <= 0x1000) {
+            g_wrsrOffsets.res_stride = static_cast<uint32_t>(strideVal);
+        }
+        logger::logMessage(GRML_LOG_INFO, "Offsets", "resource_vector resolved -> 0x%p (stride=0x%X)",
+                           g_resourceVectorAddr, g_wrsrOffsets.res_stride);
+    } else if (priceTableSite) {
         const uint32_t vecDisp   = static_cast<uint32_t>(offsetsIni.getInt("signatures", "price_table_vec_disp_off", 14));
         const uint32_t vecNextIp = static_cast<uint32_t>(offsetsIni.getInt("signatures", "price_table_vec_next_ip_off", 18));
         const uint32_t strideOff = static_cast<uint32_t>(offsetsIni.getInt("signatures", "price_table_stride_imm_off", 45));
@@ -894,7 +957,11 @@ bool bootstrap(const std::filesystem::path& loaderRootDir)
         logger::logMessage(GRML_LOG_INFO, "AOBScanner", "price_table_aob resolved -> 0x%p (stride=0x%X)",
                            g_resourceVectorAddr, g_wrsrOffsets.res_stride);
     }
-    if (evalDistSite) {
+
+    if (hostResolveNamedOffset("evaluate_dist_task", &namedVal) && namedVal != 0) {
+        g_evalDistTaskAddr = reinterpret_cast<void*>(namedVal);
+        logger::logMessage(GRML_LOG_INFO, "Offsets", "evaluate_dist_task resolved -> 0x%p", g_evalDistTaskAddr);
+    } else if (evalDistSite) {
         g_evalDistTaskAddr = evalDistSite;
         logger::logMessage(GRML_LOG_INFO, "AOBScanner", "dispatch_check_aob resolved -> 0x%p", g_evalDistTaskAddr);
     }

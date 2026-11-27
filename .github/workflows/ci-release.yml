@@ -8,6 +8,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-x64:
     name: Build Release x64 (/MT + WebView2 + SvelteKit)
@@ -69,6 +72,26 @@ jobs:
           name: grml-win64-release
           path: |
             build/GRML-v*-win64.zip
+
+      - name: Setup Deno for Screenshots
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]')
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Regenerate & Commit Screenshots on Main Push
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]')
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "build/release" | Out-Null
+          Copy-Item "build/cmake/bin/GloriousRepublicModLoader.exe" "build/release/" -Force
+          Copy-Item "build/cmake/bin/grml_runtime.dll" "build/release/" -Force
+          Copy-Item "build/cmake/bin/grml_offsets.ini" "build/release/" -Force
+          deno run --allow-all scripts/capture_screenshots.ts
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/screenshots/*.png
+          git diff --cached --quiet; if ($LASTEXITCODE -ne 0) { git commit -m "docs: regenerate launcher screenshots [skip ci]"; git push }
 
       - name: Publish GitHub Release on Tag
         if: startsWith(github.ref, 'refs/tags/v')

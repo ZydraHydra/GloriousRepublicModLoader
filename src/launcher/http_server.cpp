@@ -3,6 +3,9 @@
 #include "launcher/launcher_api.hpp"
 #include "common/ini_util.hpp"
 #include "common/json_min.hpp"
+#include "common/offset_resolver.hpp"
+#include "common/pe_scanner.hpp"
+#include "embedded_grml_offsets.hpp"
 #include "embedded_ui_assets.hpp"
 
 #include <winsock2.h>
@@ -338,6 +341,136 @@ std::string checkGitHubReleaseJson()
            "\",\"updateAvailable\":" + std::string(newer ? "true" : "false") + "}";
 }
 
+std::string updateOffsetsOtaJson(const std::filesystem::path& loaderDir,
+                                 const std::filesystem::path& dataDir)
+{
+    grml::IniFile cfg;
+    cfg.loadFromFile(dataDir / L"grml.ini");
+    const std::string rawUrl = cfg.getString(
+        "general",
+        "offsets_ota_url",
+        "https://raw.githubusercontent.com/ZydraHydra/GloriousRepublicModLoader/main/config/grml_offsets.ini");
+
+    const std::wstring wideUrl = grml::utf8ToWide(rawUrl);
+    URL_COMPONENTS uc{};
+    uc.dwStructSize     = sizeof(uc);
+    uc.dwHostNameLength = static_cast<DWORD>(-1);
+    uc.dwUrlPathLength  = static_cast<DWORD>(-1);
+    if (!WinHttpCrackUrl(wideUrl.c_str(), static_cast<DWORD>(wideUrl.size()), 0, &uc) ||
+        uc.dwHostNameLength == 0 || uc.dwUrlPathLength == 0) {
+        return "{\"ok\":false,\"error\":\"Invalid OTA URL\"}";
+    }
+    const std::wstring host(uc.lpszHostName, uc.dwHostNameLength);
+    const std::wstring urlPath(uc.lpszUrlPath, uc.dwUrlPathLength);
+    const bool isHttps = (uc.nScheme == INTERNET_SCHEME_HTTPS);
+
+    const std::wstring ua = L"GloriousRepublicModLoader/" + grml::utf8ToWide(GRML_BUILD_VERSION);
+    HINTERNET hSession = WinHttpOpen(ua.c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) return "{\"ok\":false,\"error\":\"WinHttpOpen failed\"}";
+    WinHttpSetTimeouts(hSession, 4000, 4000, 4000, 5000);
+
+    HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), uc.nPort, 0);
+    if (!hConnect) {
+        WinHttpCloseHandle(hSession);
+        return "{\"ok\":false,\"error\":\"Failed to connect to GitHub raw host\"}";
+    }
+
+    HINTERNET hRequest = WinHttpOpenRequest(
+        hConnect, L"GET", urlPath.c_str(), nullptr,
+        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, isHttps ? WINHTTP_FLAG_SECURE : 0);
+    if (!hRequest) {
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return "{\"ok\":false,\"error\":\"WinHttpOpenRequest failed\"}";
+    }
+
+    BOOL sent = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                                   WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+    if (sent) sent = WinHttpReceiveResponse(hRequest, nullptr);
+
+    DWORD statusCode = 0;
+    DWORD szStatus   = sizeof(statusCode);
+    if (sent) {
+        WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &szStatus, WINHTTP_NO_HEADER_INDEX);
+    }
+
+    std::string body;
+    if (sent && statusCode == 200) {
+        DWORD avail = 0;
+        while (WinHttpQueryDataAvailable(hRequest, &avail) && avail > 0) {
+            std::string chunk(avail, '\0');
+            DWORD read = 0;
+            if (WinHttpReadData(hRequest, chunk.data(), avail, &read) && read > 0) {
+                chunk.resize(read);
+                body += chunk;
+            } else {
+                break;
+            }
+            if (body.size() > 1024 * 1024) break;
+        }
+    }
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+
+    if (!sent) return "{\"ok\":false,\"error\":\"GitHub OTA request failed\"}";
+    if (statusCode != 200) {
+        return "{\"ok\":false,\"error\":\"GitHub OTA HTTP " + std::to_string(statusCode) + "\"}";
+    }
+
+    // Strip UTF-8 BOM if present
+    if (body.size() >= 3 &&
+        static_cast<unsigned char>(body[0]) == 0xEF &&
+        static_cast<unsigned char>(body[1]) == 0xBB &&
+        static_cast<unsigned char>(body[2]) == 0xBF) {
+        body.erase(0, 3);
+    }
+
+    grml::IniFile parsed;
+    if (!parsed.loadFromMemory(body) || parsed.sectionOrder().empty()) {
+        return "{\"ok\":false,\"error\":\"Downloaded grml_offsets.ini is empty or invalid\"}";
+    }
+    const auto defs = grml::offsets::collectOffsetDefinitions(parsed);
+    if (defs.empty() && !parsed.sectionKeys("signatures") && !parsed.sectionKeys("builds")) {
+        return "{\"ok\":false,\"error\":\"Downloaded file is not a valid grml_offsets.ini\"}";
+    }
+
+    grml::IniFile prevIni;
+    uint64_t prevHash = 0;
+    grml::offsets::loadMergedOffsetsIni(loaderDir, dataDir, grml::generated::kEmbeddedGrmlOffsetsIni,
+                                        prevIni, prevHash);
+
+    std::filesystem::path targetPath = loaderDir / L"grml_offsets.ini";
+    if (!grml::writeFileBytesW(targetPath, body)) {
+        targetPath = dataDir / L"grml_offsets.ini";
+        if (!grml::writeFileBytesW(targetPath, body)) {
+            return "{\"ok\":false,\"error\":\"Failed to write grml_offsets.ini\"}";
+        }
+    }
+
+    // Invalidate PE-hash RVA cache so next launch or /api/state re-verifies cleanly
+    DeleteFileW((dataDir / L"grml_offset_cache.ini").c_str());
+
+    grml::IniFile newIni;
+    uint64_t newHash = 0;
+    grml::offsets::loadMergedOffsetsIni(loaderDir, dataDir, grml::generated::kEmbeddedGrmlOffsetsIni,
+                                        newIni, newHash);
+    const bool updated = (newHash != prevHash);
+
+    char prevBuf[32]{}, newBuf[32]{};
+    std::snprintf(prevBuf, sizeof(prevBuf), "0x%016llX", static_cast<unsigned long long>(prevHash));
+    std::snprintf(newBuf, sizeof(newBuf), "0x%016llX", static_cast<unsigned long long>(newHash));
+
+    return "{\"ok\":true,\"updated\":" + std::string(updated ? "true" : "false") +
+           ",\"previousHash\":\"" + std::string(prevBuf) + "\"" +
+           ",\"hash\":\"" + std::string(newBuf) + "\"" +
+           ",\"entryCount\":" + std::to_string(defs.size()) +
+           ",\"path\":\"" + grml::launcher_api::jsonEscape(grml::wideToUtf8(targetPath.wstring())) + "\"}";
+}
+
 std::string buildSuspectsJson(const std::vector<std::string>& logTail,
                               const std::string& werJson,
                               const std::vector<CachedModRef>& mods)
@@ -575,6 +708,10 @@ void handleClient(SOCKET client)
         sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8", resp);
     } else if (method == "GET" && path == "/api/check-update") {
         sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8", checkGitHubReleaseJson());
+    } else if (method == "POST" && path == "/api/update-offsets") {
+        std::lock_guard lock(g_apiMutex);
+        sendHttpResponse(client, 200, "OK", "application/json; charset=utf-8",
+                         updateOffsetsOtaJson(g_loaderDir, dataDir));
     } else if (method == "GET" && path == "/api/saves") {
         std::lock_guard lock(g_apiMutex);
         const auto it = query.find("game");

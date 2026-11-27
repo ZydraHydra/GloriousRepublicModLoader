@@ -30,9 +30,11 @@
 #include "common/ini_util.hpp"
 #include "common/json_min.hpp"
 #include "common/manifest.hpp"
+#include "common/offset_resolver.hpp"
 #include "common/pe_scanner.hpp"
 #include "common/ui_schema.hpp"
 #include "common/vfs_index.hpp"
+#include "embedded_grml_offsets.hpp"
 #include "launcher/http_server.hpp"
 #include "launcher/injector.hpp"
 #include "launcher/launcher_api.hpp"
@@ -121,28 +123,148 @@ std::string buildDiscoverJsonStr(const std::filesystem::path& loaderDir, const s
     const std::filesystem::path gameExe = grml::discoverWrsrGameExe(loaderDir, cfgGame);
 
     std::string gameSha;
+    std::string peFileVer;
     grml::PeModuleInfo peInfo{};
+    HANDLE hfMapped = INVALID_HANDLE_VALUE;
+    HANDLE hmMapped = nullptr;
+    void*  mappedView = nullptr;
     if (!gameExe.empty()) {
-        gameSha = grml::computeFileSha256(gameExe);
-        HANDLE hf = CreateFileW(gameExe.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                                nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (hf != INVALID_HANDLE_VALUE) {
-            HANDLE hm = CreateFileMappingW(hf, nullptr, PAGE_READONLY | SEC_IMAGE, 0, 0, nullptr);
-            if (hm) {
-                void* view = MapViewOfFile(hm, FILE_MAP_READ, 0, 0, 0);
-                if (view) {
-                    grml::inspectLoadedPe(static_cast<uint8_t*>(view), peInfo);
-                    UnmapViewOfFile(view);
+        gameSha   = grml::computeFileSha256(gameExe);
+        peFileVer = grml::readPeFileVersion(gameExe);
+        hfMapped = CreateFileW(gameExe.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (hfMapped != INVALID_HANDLE_VALUE) {
+            hmMapped = CreateFileMappingW(hfMapped, nullptr, PAGE_READONLY | SEC_IMAGE, 0, 0, nullptr);
+            if (hmMapped) {
+                mappedView = MapViewOfFile(hmMapped, FILE_MAP_READ, 0, 0, 0);
+                if (mappedView) {
+                    grml::inspectLoadedPe(static_cast<uint8_t*>(mappedView), peInfo);
                 }
-                CloseHandle(hm);
             }
-            CloseHandle(hf);
         }
     }
 
     grml::IniFile offsets;
-    offsets.loadFromFile(loaderDir / L"grml_offsets.ini");
-    const std::string gameVer = gameSha.empty() ? "unknown" : offsets.getString("builds", gameSha, "unknown");
+    uint64_t offsetsHash = 0;
+    grml::offsets::loadMergedOffsetsIni(loaderDir, dataDir, grml::generated::kEmbeddedGrmlOffsetsIni,
+                                        offsets, offsetsHash);
+    std::string gameVer = gameSha.empty() ? "unknown" : offsets.getString("builds", gameSha, "unknown");
+    if (gameVer == "unknown" && !peFileVer.empty()) {
+        gameVer = peFileVer;
+    }
+
+    // Collect offset definitions & resolve via grml_session.json (live runtime) or PE cache/.text scan
+    const auto offsetDefs = grml::offsets::collectOffsetDefinitions(offsets);
+    std::vector<grml::offsets::ResolvedOffsetEntry> resolvedOffsets;
+    bool loadedFromSession = false;
+    {
+        std::string sessRaw;
+        if (grml::readFileBytesW(dataDir / L"grml_session.json", sessRaw)) {
+            const auto parsed = grml::parseJson(sessRaw);
+            if (parsed && parsed->isObject()) {
+                char expectedTs[32]{}, expectedImg[32]{}, expectedEp[32]{}, expectedHash[32]{};
+                std::snprintf(expectedTs, sizeof(expectedTs), "0x%08X", peInfo.timeDateStamp);
+                std::snprintf(expectedImg, sizeof(expectedImg), "0x%X", static_cast<unsigned>(peInfo.imageSize));
+                std::snprintf(expectedEp, sizeof(expectedEp), "0x%X", peInfo.addressOfEntryPoint);
+                std::snprintf(expectedHash, sizeof(expectedHash), "0x%016llX", static_cast<unsigned long long>(offsetsHash));
+
+                const auto* tsV   = parsed->get("pe_timestamp");
+                const auto* imgV  = parsed->get("pe_size_of_image");
+                const auto* epV   = parsed->get("pe_entry_point");
+                const auto* hashV = parsed->get("offsets_fnv1a64");
+                const auto* arrV  = parsed->get("offsets");
+                if (arrV && arrV->isArray() &&
+                    tsV && tsV->asString() == expectedTs &&
+                    imgV && imgV->asString() == expectedImg &&
+                    epV && epV->asString() == expectedEp &&
+                    hashV && hashV->asString() == expectedHash) {
+                    const auto& arr = std::get<grml::JsonArray>(arrV->data);
+                    for (const auto& d : offsetDefs) {
+                        grml::offsets::ResolvedOffsetEntry re;
+                        re.def = d;
+                        for (const auto& item : arr) {
+                            if (!item.isObject()) continue;
+                            const auto* nm = item.get("name");
+                            if (nm && nm->asString() == d.name) {
+                                const std::string st = item.get("status") ? item.get("status")->asString() : "";
+                                if (st == "OK") re.status = grml::offsets::OffsetStatus::Ok;
+                                else if (st == "CACHED") re.status = grml::offsets::OffsetStatus::Cached;
+                                else if (st == "MISSING") re.status = grml::offsets::OffsetStatus::Missing;
+                                re.matchCount = static_cast<size_t>(item.get("match_count") ? item.get("match_count")->asInt(0) : 0);
+                                const std::string rvaS = item.get("rva") ? item.get("rva")->asString() : "";
+                                const std::string resS = item.get("resolved") ? item.get("resolved")->asString() : "";
+                                if (!rvaS.empty()) re.matchedRva = static_cast<uint32_t>(std::strtoul(rvaS.c_str(), nullptr, 0));
+                                if (!resS.empty()) re.resolvedValue = static_cast<uintptr_t>(std::strtoull(resS.c_str(), nullptr, 0));
+                                break;
+                            }
+                        }
+                        resolvedOffsets.push_back(std::move(re));
+                    }
+                    loadedFromSession = true;
+                }
+            }
+        }
+    }
+    if (!loadedFromSession) {
+        if (peInfo.base && peInfo.textBase && peInfo.textSize > 0) {
+            const auto cachePath = dataDir / L"grml_offset_cache.ini";
+            const bool allCached = grml::offsets::tryResolveFromCache(
+                cachePath, peInfo, offsetsHash, offsetDefs, resolvedOffsets);
+            if (!allCached) {
+                std::vector<void*> sites(resolvedOffsets.size(), nullptr);
+                std::vector<grml::AobPatternRequest> reqs;
+                std::vector<size_t> reqIndices;
+                for (size_t i = 0; i < resolvedOffsets.size(); ++i) {
+                    if (resolvedOffsets[i].status != grml::offsets::OffsetStatus::Cached) {
+                        reqs.push_back({resolvedOffsets[i].def.name,
+                                        resolvedOffsets[i].def.pattern,
+                                        &sites[i],
+                                        resolvedOffsets[i].def.required});
+                        reqIndices.push_back(i);
+                    }
+                }
+                if (!reqs.empty()) {
+                    grml::runSinglePassAobScan(peInfo.textBase, peInfo.textSize, reqs);
+                    for (size_t k = 0; k < reqs.size(); ++k) {
+                        const size_t idx = reqIndices[k];
+                        auto& entry = resolvedOffsets[idx];
+                        entry.matchCount = reqs[k].matchCount;
+                        const auto* site = static_cast<const uint8_t*>(sites[idx]);
+                        uintptr_t val = 0;
+                        if (reqs[k].matchCount == 1 && site &&
+                            grml::offsets::applyOffsetResolveRule(peInfo, site, entry.def, val)) {
+                            entry.status        = grml::offsets::OffsetStatus::Ok;
+                            entry.matchedRva    = static_cast<uint32_t>(site - peInfo.base);
+                            // Store RVA-based value when mapped from SEC_IMAGE (convert VA -> RVA for pointer modes)
+                            entry.resolvedValue = (entry.def.resolveMode == grml::offsets::OffsetResolveMode::Disp32)
+                                ? val
+                                : static_cast<uintptr_t>(val - reinterpret_cast<uintptr_t>(peInfo.base));
+                        } else {
+                            entry.status = grml::offsets::OffsetStatus::Missing;
+                        }
+                    }
+                    grml::offsets::writeOffsetCache(cachePath, peInfo, offsetsHash, resolvedOffsets);
+                }
+            } else {
+                for (auto& entry : resolvedOffsets) {
+                    if (entry.status == grml::offsets::OffsetStatus::Cached &&
+                        entry.def.resolveMode != grml::offsets::OffsetResolveMode::Disp32) {
+                        entry.resolvedValue -= reinterpret_cast<uintptr_t>(peInfo.base);
+                    }
+                }
+            }
+        } else {
+            for (const auto& d : offsetDefs) {
+                grml::offsets::ResolvedOffsetEntry re;
+                re.def = d;
+                re.status = grml::offsets::OffsetStatus::Unscanned;
+                resolvedOffsets.push_back(std::move(re));
+            }
+        }
+    }
+    if (mappedView) UnmapViewOfFile(mappedView);
+    if (hmMapped) CloseHandle(hmMapped);
+    if (hfMapped != INVALID_HANDLE_VALUE) CloseHandle(hfMapped);
 
     grml::DiscoveryResult disc = grml::discoverAllPlugins(loaderDir, gameExe, cfg);
     std::vector<std::string> topoWarn;
@@ -173,9 +295,33 @@ std::string buildDiscoverJsonStr(const std::filesystem::path& loaderDir, const s
     out += "  \"dataDir\": \"" + jsonEsc(grml::wideToUtf8(dataDir.wstring())) + "\",\n";
     out += "  \"gameExe\": \"" + jsonEsc(grml::wideToUtf8(gameExe.wstring())) + "\",\n";
     out += "  \"gameVersion\": \"" + jsonEsc(gameVer) + "\",\n";
+    out += "  \"peFileVersion\": \"" + jsonEsc(peFileVer) + "\",\n";
     out += "  \"gameSha256\": \"" + jsonEsc(gameSha) + "\",\n";
     addFmt("  \"peTimestamp\": \"0x%08X\",\n", peInfo.timeDateStamp);
     addFmt("  \"peSizeOfImage\": \"0x%zX\",\n", peInfo.imageSize);
+    addFmt("  \"peEntryPoint\": \"0x%X\",\n", peInfo.addressOfEntryPoint);
+    addFmt("  \"offsetsHash\": \"0x%016llX\",\n", static_cast<unsigned long long>(offsetsHash));
+    out += "  \"offsets\": [\n";
+    for (size_t i = 0; i < resolvedOffsets.size(); ++i) {
+        const auto& e = resolvedOffsets[i];
+        char rvaBuf[32]{}, resBuf[32]{};
+        if (e.status == grml::offsets::OffsetStatus::Ok || e.status == grml::offsets::OffsetStatus::Cached) {
+            std::snprintf(rvaBuf, sizeof(rvaBuf), "0x%X", e.matchedRva);
+            std::snprintf(resBuf, sizeof(resBuf), "0x%llX", static_cast<unsigned long long>(e.resolvedValue));
+        }
+        out += "    {";
+        out += "\"name\":\"" + jsonEsc(e.def.name) + "\",";
+        out += "\"status\":\"" + std::string(grml::offsets::offsetStatusToString(e.status)) + "\",";
+        out += "\"matchCount\":" + std::to_string(e.matchCount) + ",";
+        out += "\"resolve\":\"" + std::string(grml::offsets::resolveModeToString(e.def.resolveMode)) + "\",";
+        out += "\"verifiedBuild\":\"" + jsonEsc(e.def.verifiedBuild) + "\",";
+        out += "\"anchorXref\":\"" + jsonEsc(e.def.anchorXref) + "\",";
+        out += "\"required\":" + std::string(e.def.required ? "true" : "false") + ",";
+        out += "\"rva\":\"" + std::string(rvaBuf) + "\",";
+        out += "\"resolved\":\"" + std::string(resBuf) + "\"";
+        out += std::string("}") + ((i + 1 < resolvedOffsets.size()) ? ",\n" : "\n");
+    }
+    out += "  ],\n";
     out += "  \"warnings\": " + jsonStrArray(topoWarn) + ",\n";
     out += "  \"grmlIni\": " + serializeGrmlIniJson(cfg) + ",\n";
     out += "  \"vfs\": " + vfs.serializeJson() + ",\n";

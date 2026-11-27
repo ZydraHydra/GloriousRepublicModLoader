@@ -51,6 +51,7 @@ bool                    g_sessionStop = false;
 bool                    g_sessionDirty = false;
 std::wstring            g_pendingSaveName;
 std::wstring            g_pendingSavePath;
+SessionDiagnosticsSnapshot g_sessionDiag;
 std::atomic<bool>       g_autoLoadPending{false};
 std::mutex              g_autoLoadMutex;
 std::wstring            g_autoLoadSaveName;
@@ -94,7 +95,8 @@ std::string currentUtcIso8601()
 
 void writeSessionJsonFile(const std::filesystem::path& outPath,
                           const std::wstring& saveName,
-                          const std::wstring& savePath)
+                          const std::wstring& savePath,
+                          const SessionDiagnosticsSnapshot& diag)
 {
     if (outPath.empty()) return;
     const std::string nameUtf8 = jsonEscapeLocal(wideToUtf8Local(saveName));
@@ -102,13 +104,48 @@ void writeSessionJsonFile(const std::filesystem::path& outPath,
     const std::string tsUtc    = currentUtcIso8601();
     const DWORD pid            = GetCurrentProcessId();
 
+    char hexBuf[64]{};
     std::string json = "{\n";
     json += "  \"last_loaded_save\": \"" + nameUtf8 + "\",\n";
     json += "  \"last_loaded_save_path\": \"" + pathUtf8 + "\",\n";
     json += "  \"auto_load_save\": \"\",\n";
     json += "  \"timestamp_utc\": \"" + tsUtc + "\",\n";
-    json += "  \"pid\": " + std::to_string(pid) + "\n";
-    json += "}\n";
+    json += "  \"pid\": " + std::to_string(pid);
+    if (diag.hasData) {
+        json += ",\n  \"game_version\": \"" + jsonEscapeLocal(diag.gameVersion) + "\"";
+        std::snprintf(hexBuf, sizeof(hexBuf), "0x%08X", diag.peTimestamp);
+        json += ",\n  \"pe_timestamp\": \"" + std::string(hexBuf) + "\"";
+        std::snprintf(hexBuf, sizeof(hexBuf), "0x%X", diag.peSizeOfImage);
+        json += ",\n  \"pe_size_of_image\": \"" + std::string(hexBuf) + "\"";
+        std::snprintf(hexBuf, sizeof(hexBuf), "0x%X", diag.peEntryPoint);
+        json += ",\n  \"pe_entry_point\": \"" + std::string(hexBuf) + "\"";
+        std::snprintf(hexBuf, sizeof(hexBuf), "0x%016llX", static_cast<unsigned long long>(diag.offsetsFnv1a64));
+        json += ",\n  \"offsets_fnv1a64\": \"" + std::string(hexBuf) + "\"";
+        json += ",\n  \"offsets\": [\n";
+        for (size_t i = 0; i < diag.offsets.size(); ++i) {
+            const auto& e = diag.offsets[i];
+            std::string rvaStr;
+            std::string resolvedStr;
+            if (e.status == grml::offsets::OffsetStatus::Ok || e.status == grml::offsets::OffsetStatus::Cached) {
+                std::snprintf(hexBuf, sizeof(hexBuf), "0x%X", e.matchedRva);
+                rvaStr = hexBuf;
+                std::snprintf(hexBuf, sizeof(hexBuf), "0x%llX", static_cast<unsigned long long>(e.resolvedValue));
+                resolvedStr = hexBuf;
+            }
+            json += "    {";
+            json += "\"name\":\"" + jsonEscapeLocal(e.def.name) + "\",";
+            json += "\"status\":\"" + std::string(grml::offsets::offsetStatusToString(e.status)) + "\",";
+            json += "\"match_count\":" + std::to_string(e.matchCount) + ",";
+            json += "\"resolve\":\"" + std::string(grml::offsets::resolveModeToString(e.def.resolveMode)) + "\",";
+            json += "\"verified_build\":\"" + jsonEscapeLocal(e.def.verifiedBuild) + "\",";
+            json += "\"anchor_xref\":\"" + jsonEscapeLocal(e.def.anchorXref) + "\",";
+            json += "\"rva\":\"" + rvaStr + "\",";
+            json += "\"resolved\":\"" + resolvedStr + "\"";
+            json += std::string("}") + ((i + 1 < diag.offsets.size()) ? ",\n" : "\n");
+        }
+        json += "  ]";
+    }
+    json += "\n}\n";
 
     std::filesystem::path tmpPath = outPath;
     tmpPath += L".tmp";
@@ -130,6 +167,7 @@ void sessionWriterThreadProc()
     for (;;) {
         std::wstring saveName;
         std::wstring savePath;
+        SessionDiagnosticsSnapshot diag;
         {
             std::unique_lock lock(g_sessionMutex);
             g_sessionCv.wait(lock, [] { return g_sessionStop || g_sessionDirty; });
@@ -137,8 +175,9 @@ void sessionWriterThreadProc()
             g_sessionDirty = false;
             saveName = g_pendingSaveName;
             savePath = g_pendingSavePath;
+            diag     = g_sessionDiag;
         }
-        writeSessionJsonFile(g_sessionJsonPath, saveName, savePath);
+        writeSessionJsonFile(g_sessionJsonPath, saveName, savePath, diag);
     }
 }
 
@@ -374,7 +413,7 @@ bool install(const std::filesystem::path& loaderDir)
                                 g_autoLoadSaveName = targetW;
                             }
                             g_autoLoadPending.store(true, std::memory_order_release);
-                            writeSessionJsonFile(g_sessionJsonPath, targetW, L"");
+                            writeSessionJsonFile(g_sessionJsonPath, targetW, L"", SessionDiagnosticsSnapshot{});
                             logger::logMessage(GRML_LOG_INFO, "SaveEvents",
                                                "Queued one-shot auto-load for '%s' (cleared auto_load_save in grml_session.json)",
                                                targetUtf8.c_str());
@@ -448,6 +487,18 @@ void registerWrite(GrmlSaveEventFn onWrite, void* userData)
     if (!onWrite) return;
     std::lock_guard lock(g_subMutex);
     g_writeSubs.push_back({onWrite, userData});
+}
+
+void publishOffsetDiagnostics(SessionDiagnosticsSnapshot snapshot)
+{
+    if (g_sessionJsonPath.empty()) return;
+    snapshot.hasData = true;
+    {
+        std::lock_guard lock(g_sessionMutex);
+        g_sessionDiag  = std::move(snapshot);
+        g_sessionDirty = true;
+    }
+    g_sessionCv.notify_one();
 }
 
 void notifyInGameState(bool inGame)

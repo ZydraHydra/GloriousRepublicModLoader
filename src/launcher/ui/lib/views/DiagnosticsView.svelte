@@ -34,6 +34,18 @@
 		return sha.length > 20 ? `${sha.slice(0, 10)}...${sha.slice(-8)}` : sha;
 	});
 
+	const offsetEntries = $derived(app.discovery?.offsets ?? []);
+	const missingOffsetCount = $derived(
+		offsetEntries.filter((o) => o.status === 'MISSING').length
+	);
+
+	function offsetBadgeVariant(status: string): 'ready' | 'grml' | 'warn' | 'default' {
+		if (status === 'OK') return 'ready';
+		if (status === 'CACHED') return 'grml';
+		if (status === 'MISSING') return 'warn';
+		return 'default';
+	}
+
 	const statusBadgeInfo = $derived.by(() => {
 		const dd = app.diagData;
 		if (!dd) return { text: 'SOVIET64.exe: Idle', variant: 'default' as const };
@@ -110,8 +122,18 @@
 		<div class="diag-grid">
 			<div class="diag-card">
 				<div class="diag-label">WRSR Build</div>
-				<div class="diag-val">{app.discovery.gameVersion}</div>
-				<div class="diag-sub">PE {app.discovery.peTimestamp} · {app.discovery.peSizeOfImage}</div>
+				<div class="diag-val">
+					{app.discovery.gameVersion}
+					{#if app.discovery.peFileVersion && app.discovery.peFileVersion !== app.discovery.gameVersion}
+						<span class="muted" style="font-size:11px;">(PE {app.discovery.peFileVersion})</span>
+					{/if}
+				</div>
+				<div class="diag-sub">
+					PE {app.discovery.peTimestamp} · {app.discovery.peSizeOfImage}
+					{#if app.discovery.peEntryPoint}
+						· EP {app.discovery.peEntryPoint}
+					{/if}
+				</div>
 			</div>
 			<!-- svelte-ignore a11y_click_events_have_key_events -->
 			<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -139,6 +161,85 @@
 			{/if}
 		</div>
 	{/if}
+
+	<div class="offsets-hdr">
+		<div>
+			<SectionHeader title="Offset Definitions & Signature Health" />
+			{#if app.discovery?.offsetsHash}
+				<div class="muted" style="font-size:11px;margin-top:-6px;margin-bottom:8px;">
+					<code>grml_offsets.ini</code> FNV-1a: <code>{app.discovery.offsetsHash}</code>
+					{#if missingOffsetCount > 0}
+						· <span style="color:var(--danger);">{missingOffsetCount} missing</span>
+					{/if}
+				</div>
+			{/if}
+		</div>
+		<div class="diag-header-actions">
+			{#if app.offsetsOtaResult}
+				{#if app.offsetsOtaResult.ok}
+					<Badge variant={app.offsetsOtaResult.updated ? 'grml' : 'ready'}>
+						{app.offsetsOtaResult.updated ? 'Offsets Updated' : 'Offsets Up to Date'}
+					</Badge>
+				{:else}
+					<Badge variant="warn">{app.offsetsOtaResult.error || 'OTA Failed'}</Badge>
+				{/if}
+			{/if}
+			<Button size="sm" disabled={app.updatingOffsets} onclick={() => app.updateOffsetsOta()}>
+				{app.updatingOffsets ? 'Updating...' : 'Update Offsets (GitHub OTA)'}
+			</Button>
+		</div>
+	</div>
+
+	<div style="margin-bottom:14px;">
+		{#if offsetEntries.length === 0}
+			<PanelCard>
+				<div class="muted">No declarative offset sections found in grml_offsets.ini.</div>
+			</PanelCard>
+		{:else}
+			<PanelCard>
+				<div class="offsets-table-wrap">
+					<table class="offsets-table">
+						<thead>
+							<tr>
+								<th>Section</th>
+								<th>Status</th>
+								<th>Resolve Mode</th>
+								<th>Verified Build</th>
+								<th>RVA / Target</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each offsetEntries as entry (entry.name)}
+								<tr title={entry.anchorXref ? `Anchor: ${entry.anchorXref}` : ''}>
+									<td>
+										<code>[{entry.name}]</code>
+										{#if entry.anchorXref}
+											<div class="muted" style="font-size:10px;">{entry.anchorXref}</div>
+										{/if}
+									</td>
+									<td>
+										<Badge variant={offsetBadgeVariant(entry.status)}>{entry.status}</Badge>
+									</td>
+									<td><code>{entry.resolve}</code></td>
+									<td>{entry.verifiedBuild || '—'}</td>
+									<td>
+										{#if entry.status === 'OK' || entry.status === 'CACHED'}
+											<code>{entry.rva || '—'}</code>
+											{#if entry.resolved}
+												<span class="muted"> → </span><code>{entry.resolved}</code>
+											{/if}
+										{:else}
+											<span class="muted">matches={entry.matchCount}</span>
+										{/if}
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			</PanelCard>
+		{/if}
+	</div>
 
 	<SectionHeader title="Launch & Crash Attribution" />
 	<div style="margin-bottom:14px;">
@@ -213,5 +314,35 @@
 		justify-content: space-between;
 		align-items: center;
 		gap: 10px;
+	}
+	.offsets-hdr {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 10px;
+		flex-wrap: wrap;
+	}
+	.offsets-table-wrap {
+		overflow-x: auto;
+	}
+	.offsets-table {
+		width: 100%;
+		border-collapse: collapse;
+		font-size: 12px;
+	}
+	.offsets-table th,
+	.offsets-table td {
+		text-align: left;
+		padding: 6px 8px;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+	}
+	.offsets-table th {
+		font-size: 10px;
+		text-transform: uppercase;
+		letter-spacing: 0.5px;
+		color: var(--muted);
+	}
+	.offsets-table tr:last-child td {
+		border-bottom: none;
 	}
 </style>

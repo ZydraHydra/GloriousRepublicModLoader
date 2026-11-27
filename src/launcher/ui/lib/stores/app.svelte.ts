@@ -81,15 +81,41 @@ export interface PlaylistEntry {
 	enabledIds: string[];
 }
 
+export interface OffsetDiagnosticEntry {
+	name: string;
+	status: 'OK' | 'CACHED' | 'MISSING' | 'UNSCANNED';
+	matchCount: number;
+	resolve: string;
+	verifiedBuild: string;
+	anchorXref: string;
+	required: boolean;
+	rva: string;
+	resolved: string;
+}
+
+export interface OffsetsOtaResult {
+	ok: boolean;
+	updated?: boolean;
+	hash?: string;
+	previousHash?: string;
+	entryCount?: number;
+	path?: string;
+	error?: string;
+}
+
 export interface DiscoveryData {
 	loaderVersion: string;
 	loaderDir: string;
 	dataDir?: string;
 	gameExe: string;
 	gameVersion: string;
+	peFileVersion?: string;
 	gameSha256: string;
 	peTimestamp: string;
 	peSizeOfImage: string;
+	peEntryPoint?: string;
+	offsetsHash?: string;
+	offsets?: OffsetDiagnosticEntry[];
 	warnings: string[];
 	mods: ModItem[];
 }
@@ -199,6 +225,8 @@ class AppStore {
 	// Update check state
 	updateInfo = $state<UpdateCheckInfo | null>(null);
 	checkingUpdate = $state(false);
+	offsetsOtaResult = $state<OffsetsOtaResult | null>(null);
+	updatingOffsets = $state(false);
 
 	private diagPollInFlight = false;
 	private diagTimer: ReturnType<typeof setInterval> | null = null;
@@ -407,6 +435,32 @@ class AppStore {
 			if (manual) this.setStatus('Update check failed (offline).');
 		} finally {
 			this.checkingUpdate = false;
+		}
+	}
+
+	async updateOffsetsOta() {
+		if (this.updatingOffsets) return;
+		this.updatingOffsets = true;
+		this.setStatus('Fetching latest grml_offsets.ini from GitHub...');
+		try {
+			const resp = await fetch('/api/update-offsets', { method: 'POST' });
+			const data = (await resp.json()) as OffsetsOtaResult;
+			this.offsetsOtaResult = data;
+			if (!data.ok) {
+				this.setStatus(`Offsets OTA failed: ${data.error || 'Unknown error'}`);
+				return;
+			}
+			await this.fetchState();
+			if (data.updated) {
+				this.setStatus(`Updated grml_offsets.ini (${data.entryCount ?? 0} entries, hash ${data.hash}).`);
+			} else {
+				this.setStatus(`grml_offsets.ini is already up to date (${data.hash}).`);
+			}
+		} catch {
+			this.offsetsOtaResult = { ok: false, error: 'Network error' };
+			this.setStatus('Offsets OTA update failed (offline).');
+		} finally {
+			this.updatingOffsets = false;
 		}
 	}
 

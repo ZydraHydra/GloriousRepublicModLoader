@@ -2,7 +2,7 @@
 #define GRML_API_H
 
 /* ============================================================================
- * grml_api.h — Glorious Republic Mod Loader (GRML) Pure-C Plugin ABI (v1)
+ * grml_api.h — Glorious Republic Mod Loader (GRML) Pure-C Plugin ABI (v2)
  * ============================================================================
  * Canonical ABI header owned by GloriousRepublicModLoader (include/grml_api.h).
  * Downstream mod repositories mirror this file byte-for-byte.
@@ -335,6 +335,12 @@ struct GrmlHostApi {
     /* Inter-mod service registry. */
     int32_t (GRML_CALL* RegisterService)(const char* name, uint32_t version, void* service_ptr);
     void*   (GRML_CALL* GetService)(const char* name, uint32_t version);
+
+    /* Resolves a named offset section from grml_offsets.ini (e.g. "in_game_flag").
+     * Populates *out_value with the resolved runtime address or disp32 field offset
+     * and returns 1 on success, 0 if missing/ambiguous or not yet scanned.
+     * Guaranteed ready inside GrmlPostScanFn (and immediately on cache-hit boots). */
+    int32_t (GRML_CALL* ResolveNamedOffset)(const char* section_name, uintptr_t* out_value);
 };
 
 #ifdef __cplusplus

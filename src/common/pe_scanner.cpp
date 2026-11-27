@@ -11,8 +11,6 @@
 
 namespace grml {
 
-namespace {
-
 bool parseAobPattern(std::string_view patStr,
                      std::vector<uint8_t>& bytes,
                      std::vector<uint8_t>& masks)
@@ -121,8 +119,6 @@ std::vector<std::filesystem::path> parseLibraryFoldersVdf(const std::filesystem:
     return out;
 }
 
-} // namespace
-
 bool inspectLoadedPe(uint8_t* moduleBase, PeModuleInfo& out)
 {
     out = {};
@@ -137,9 +133,10 @@ bool inspectLoadedPe(uint8_t* moduleBase, PeModuleInfo& out)
     if (nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64) return false;
     if (nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) return false;
 
-    out.base          = moduleBase;
-    out.imageSize     = nt->OptionalHeader.SizeOfImage;
-    out.timeDateStamp = nt->FileHeader.TimeDateStamp;
+    out.base                = moduleBase;
+    out.imageSize           = nt->OptionalHeader.SizeOfImage;
+    out.timeDateStamp       = nt->FileHeader.TimeDateStamp;
+    out.addressOfEntryPoint = nt->OptionalHeader.AddressOfEntryPoint;
 
     const IMAGE_SECTION_HEADER* sec = IMAGE_FIRST_SECTION(nt);
     for (WORD i = 0; i < nt->FileHeader.NumberOfSections; ++i) {
@@ -381,6 +378,65 @@ void* resolveRipRelativeDisp32(void* site, uint32_t dispOff, uint32_t nextIpOff)
     int32_t disp = 0;
     std::memcpy(&disp, p + dispOff, sizeof(disp));
     return const_cast<uint8_t*>(p + nextIpOff + disp);
+}
+
+bool verifyAobAtAddress(const uint8_t* addr,
+                        const uint8_t* textBase,
+                        size_t textSize,
+                        std::string_view patStr) noexcept
+{
+    if (!addr || !textBase || textSize == 0 || addr < textBase) {
+        return false;
+    }
+    std::vector<uint8_t> bytes;
+    std::vector<uint8_t> masks;
+    if (!parseAobPattern(patStr, bytes, masks) || bytes.empty()) {
+        return false;
+    }
+    const size_t offset = static_cast<size_t>(addr - textBase);
+    if (offset > textSize || bytes.size() > textSize - offset) {
+        return false;
+    }
+    for (size_t i = 0; i < bytes.size(); ++i) {
+        if (masks[i] && addr[i] != bytes[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string readPeFileVersion(const std::filesystem::path& exePath)
+{
+    if (exePath.empty()) return {};
+    DWORD dummy = 0;
+    const DWORD sz = GetFileVersionInfoSizeW(exePath.c_str(), &dummy);
+    if (sz == 0 || sz > 1024 * 1024) return {};
+    std::vector<uint8_t> buf(sz);
+    if (!GetFileVersionInfoW(exePath.c_str(), 0, sz, buf.data())) return {};
+    VS_FIXEDFILEINFO* ffi = nullptr;
+    UINT ffiLen = 0;
+    if (!VerQueryValueW(buf.data(), L"\\", reinterpret_cast<LPVOID*>(&ffi), &ffiLen) ||
+        !ffi || ffiLen < sizeof(VS_FIXEDFILEINFO)) {
+        return {};
+    }
+    if (ffi->dwSignature != 0xFEEF04BDu) return {};
+    char out[64]{};
+    std::snprintf(out, sizeof(out), "%u.%u.%u.%u",
+                  static_cast<unsigned>(HIWORD(ffi->dwFileVersionMS)),
+                  static_cast<unsigned>(LOWORD(ffi->dwFileVersionMS)),
+                  static_cast<unsigned>(HIWORD(ffi->dwFileVersionLS)),
+                  static_cast<unsigned>(LOWORD(ffi->dwFileVersionLS)));
+    return out;
+}
+
+uint64_t fnv1a64(std::string_view data) noexcept
+{
+    uint64_t h = 14695981039346656037ULL;
+    for (unsigned char c : data) {
+        h ^= static_cast<uint64_t>(c);
+        h *= 1099511628211ULL;
+    }
+    return h;
 }
 
 bool lookupRuntimeFunctionRva(const PeModuleInfo& pe, uint32_t rva, uint32_t& outBegin, uint32_t& outEnd) noexcept

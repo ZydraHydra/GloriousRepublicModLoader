@@ -88,6 +88,7 @@ add_library(grml_common STATIC
     src/common/ini_util.cpp
     src/common/json_min.cpp
     src/common/manifest.cpp
+    src/common/offset_resolver.cpp
     src/common/pe_scanner.cpp
     src/common/ui_schema.cpp
     src/common/zip_reader.cpp
@@ -97,7 +98,7 @@ target_include_directories(grml_common PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
-target_link_libraries(grml_common PUBLIC bcrypt)
+target_link_libraries(grml_common PUBLIC bcrypt version)
 target_compile_definitions(grml_common PUBLIC
     WIN32_LEAN_AND_MEAN
     NOMINMAX
@@ -173,6 +174,10 @@ add_executable(grml_injector WIN32
     src/launcher/launcher.rc
 )
 grml_embed_ui_assets(grml_injector "${CMAKE_CURRENT_SOURCE_DIR}/build/dist")
+grml_embed_offsets(grml_injector "${CMAKE_CURRENT_SOURCE_DIR}/config/grml_offsets.ini"
+    HEADER_NAME "embedded_grml_offsets.hpp"
+    SYMBOL_NAME "kEmbeddedGrmlOffsetsIni"
+)
 target_include_directories(grml_injector PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/src"

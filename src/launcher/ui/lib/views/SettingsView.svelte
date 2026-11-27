@@ -171,6 +171,34 @@
 		<PanelCard>
 			<div class="control-top">
 				<div class="control-label">
+					Offset Definitions (<code>grml_offsets.ini</code>)
+					{#if app.discovery?.offsetsHash}
+						<span class="muted" style="font-weight:400;margin-left:6px;">{app.discovery.offsetsHash}</span>
+					{/if}
+				</div>
+				<div style="display:flex;align-items:center;gap:8px;">
+					{#if app.offsetsOtaResult}
+						{#if app.offsetsOtaResult.ok}
+							<Badge variant={app.offsetsOtaResult.updated ? 'grml' : 'ready'}>
+								{app.offsetsOtaResult.updated ? 'Updated' : 'Up to date'}
+							</Badge>
+						{:else}
+							<Badge variant="warn">{app.offsetsOtaResult.error || 'OTA failed'}</Badge>
+						{/if}
+					{/if}
+					<Button size="sm" disabled={app.updatingOffsets} onclick={() => app.updateOffsetsOta()}>
+						{app.updatingOffsets ? 'Updating...' : 'Update Offsets (OTA)'}
+					</Button>
+				</div>
+			</div>
+			<div class="control-tip">
+				Downloads the latest <code>config/grml_offsets.ini</code> from GitHub and invalidates the PE-hash RVA cache.
+			</div>
+		</PanelCard>
+
+		<PanelCard>
+			<div class="control-top">
+				<div class="control-label">
 					Launcher Updates
 					{#if app.discovery?.loaderVersion}
 						<span class="muted" style="font-weight:400;margin-left:6px;">v{app.discovery.loaderVersion}</span>

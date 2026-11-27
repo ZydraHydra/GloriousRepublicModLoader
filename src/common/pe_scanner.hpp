@@ -14,6 +14,7 @@ struct PeModuleInfo {
     uint8_t* base{nullptr};
     size_t   imageSize{0};
     uint32_t timeDateStamp{0};
+    uint32_t addressOfEntryPoint{0};
     uint8_t* textBase{nullptr};
     size_t   textSize{0};
     uint8_t* runtimeFuncs{nullptr};
@@ -57,6 +58,23 @@ std::string computeFileSha256(const std::filesystem::path& path);
 AobScanSummary runSinglePassAobScan(const uint8_t* scanBase,
                                     size_t scanSize,
                                     std::vector<AobPatternRequest>& requests);
+
+// Parses a hex AOB pattern string ("48 8B ?? ??") into byte and mask vectors.
+bool parseAobPattern(std::string_view patStr,
+                     std::vector<uint8_t>& bytes,
+                     std::vector<uint8_t>& masks);
+
+// O(1) verification that `patStr` matches at `addr` inside [textBase, textBase + textSize).
+bool verifyAobAtAddress(const uint8_t* addr,
+                        const uint8_t* textBase,
+                        size_t textSize,
+                        std::string_view patStr) noexcept;
+
+// Reads VS_FIXEDFILEINFO FileVersion ("A.B.C.D") from an executable, or "" if absent.
+std::string readPeFileVersion(const std::filesystem::path& exePath);
+
+// Computes 64-bit FNV-1a hash of an arbitrary byte view.
+uint64_t fnv1a64(std::string_view data) noexcept;
 
 // Resolves RIP-relative disp32 target from an instruction site.
 void* resolveRipRelativeDisp32(void* site, uint32_t dispOff, uint32_t nextIpOff) noexcept;

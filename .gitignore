@@ -51,6 +51,7 @@ node_modules/
 # Python caches
 __pycache__/
 *.py[cod]
+.venv/
 
 # OS metadata
 Thumbs.db

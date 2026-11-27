@@ -106,6 +106,8 @@
 
 	{#snippet list()}
 		{#each filteredMods as mod (mod.id)}
+			{@const supportedVersions = (mod.supportedGameVersions || []).filter(Boolean)}
+			{@const hasBadVersion = Boolean(mod.gameVersionMismatch) || supportedVersions.length === 0}
 			{@const subParts = [
 				mod.author && mod.author !== 'Unknown' ? mod.author : '',
 				mod.version && mod.version !== 'unversioned' ? `v${mod.version}` : '',
@@ -148,10 +150,12 @@
 							{mod.blocked ? '! Built into GRML' : '! Warning'}
 						</Badge>
 					{/if}
-					{#if mod.gameVersionMismatch}
+					{#if hasBadVersion}
 						<Badge
 							variant="warn"
-							title={`Mod declares support for [${(mod.supportedGameVersions || []).join(', ')}], but detected game build is ${app.discovery?.gameVersion}. It can still be loaded.`}
+							title={supportedVersions.length === 0
+								? `Mod does not declare any supported game versions (detected game build is ${app.discovery?.gameVersion || 'unknown'}). It can still be loaded.`
+								: `Mod declares support for [${supportedVersions.join(', ')}], but detected game build is ${app.discovery?.gameVersion}. It can still be loaded.`}
 						>
 							! Version
 						</Badge>

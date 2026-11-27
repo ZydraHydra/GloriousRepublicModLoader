@@ -18,6 +18,7 @@ int grml_api_c_abi_smoke_check(void) {
     wrsr.struct_size = (uint32_t)sizeof(GrmlWrsrApi);
     host.abi_version = GRML_API_VERSION;
     host.struct_size = (uint32_t)sizeof(GrmlHostApi);
+    host.ResolveNamedOffset = NULL;
     ui.abi_version = GRML_API_VERSION;
     ui.struct_size = (uint32_t)sizeof(GrmlUiApi);
     return (int)(info.struct_size + offsets.struct_size + hooks.struct_size +
